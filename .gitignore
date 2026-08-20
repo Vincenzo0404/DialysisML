@@ -1,0 +1,16 @@
+*.csv
+mlruns/
+__pycache__/
+*.egg-info/
+.venv/
+.claude/
+.vscode/
+.pytest_cache/
+
+data/
+notebooks/
+results/
+analysis/
+
+.env
+*.bak
