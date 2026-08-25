@@ -14,3 +14,12 @@ analysis/
 
 .env
 *.bak
+outputs/
+.hydra/
+mlflow.db
+
+
+#Hydra
+
+multirun/
+outputs/

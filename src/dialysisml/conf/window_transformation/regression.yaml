@@ -1,0 +1,4 @@
+# One linear fit over the whole window, plus the last known value.
+_target_: dialysisml.pipeline.transformers.RegressionFeatureTransformer
+regression_columns: ${features:NUMERIC_FEATURES}
+last_value_columns: null    # null = every column, one-hot included

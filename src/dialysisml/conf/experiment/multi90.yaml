@@ -1,0 +1,8 @@
+# @package _global_
+# A named combination: nested windows need a 90-session frame to cut them from.
+defaults:
+  - override /window_transformation@postsplit.window_transformation: multisize
+
+postsplit:
+  window_conf:
+    size: 90

@@ -1,0 +1,20 @@
+# The target is the adapter, not the config: it is the adapter the main has to
+# instantiate, and it receives its config as a nested argument.
+_target_: dialysisml.adapters.FFNNAdapter
+
+model_config:
+  _target_: dialysisml.modelconf.FFNNConfig
+  name: FFNN_baseline
+  hidden_layers: []
+  dropout: 0.4
+  learning_rate: 1e-3
+  weight_decay: 1e-4
+  batch_size: 32
+  epochs: 60
+  random_seed: ${seed}
+
+  # _partial_ is required: without it Hydra would call the loss instead of
+  # passing it, and the adapter would receive its return value.
+  loss_function:
+    _target_: dialysisml.metrics.msle
+    _partial_: true

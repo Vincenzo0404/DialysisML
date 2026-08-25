@@ -1,0 +1,7 @@
+defaults:
+  - base_split
+
+_target_: dialysisml.pipeline.split.PatientGroupSplit
+
+k: 5
+seed: ${seed}

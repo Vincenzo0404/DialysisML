@@ -1,0 +1,21 @@
+defaults:
+  - base_config
+  - presplit: tte_s&h
+  - split: single
+  - postsplit: w30
+  # its own group, so the transformer and the window size vary independently
+  - window_transformation@postsplit.window_transformation: regression
+  - model: ffnn_baseline
+  - _self_
+
+# Read from the database instead of the cached parquet files.
+fromdb: false
+
+seed: 42
+
+experiment_name: tte_FFNN
+
+# Reported every epoch, alongside the training loss.
+metrics:
+  - {_target_: dialysisml.metrics.mae, _partial_: true}
+  - {_target_: dialysisml.metrics.mape, _partial_: true}

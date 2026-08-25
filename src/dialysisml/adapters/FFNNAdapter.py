@@ -26,7 +26,14 @@ class FFNNAdapter(ModelAdapter):
         y_test: np.ndarray,
     ) -> pd.DataFrame:
 
-        # Scale dataset
+        # Same run, same initialisation: without this, comparing two configs
+        # would also measure the noise between two random inits.
+        torch.manual_seed(self.model_config.random_seed)
+
+        # Scaling lives here, not in the config, because it applies to the
+        # DERIVED features: slope, intercept and RMSE come out on scales orders
+        # of magnitude apart, and only a gradient-based model cares. A tree
+        # ensemble would not need this step at all.
         scaler = StandardScaler()
         X_train_scaled = scaler.fit_transform(X_train)
         X_test_scaled = scaler.transform(X_test)

@@ -1,5 +1,4 @@
 RAW_FEATURES = [
-    # Esami ematici e indici sistemici (I "Pesi Massimi" originali e nuovi)
     "bmi",
     "hb",
     "bcm_post",
@@ -34,31 +33,65 @@ RAW_FEATURES = [
     "tipo_accesso_vascolare",
 ]
 
+# Columns of the materialized view that the model should not use. Declaring
+# what to leave out rather than what to keep means a new column added to the
+# view flows in on its own, without touching this file.
+EXCLUDED_FEATURES = [
+    "score_fav",
+    "score_cvc",
+    "colesterolemia",
+    "fosfalcindex",
+    "a_v",
+    "pa_qb",
+    "pv_qb",
+    "mesi_fav",
+    "arter",
+    "vena",
+    "duration",
+]
+
+# Which columns are categorical cannot be read off the dtype: an integer code
+# would look numeric, and a sex encoded as 0/1 would be scaled by mistake.
 CATEGORICAL_FEATURES = ["sesso", "tipo_accesso_vascolare"]
 NUMERIC_FEATURES = [f for f in RAW_FEATURES if f not in CATEGORICAL_FEATURES]
 
-OHE_FEATURES = [
-    "sesso_M",
-    "sesso_F",
-    "tipo_accesso_vascolare_FAV",
-    "tipo_accesso_vascolare_CVC",
-    "tipo_accesso_vascolare_CVC-Per",
-    "tipo_accesso_vascolare_CVC-Tem",
+# Which scaler suits which column. Roughly normal values get standardised,
+# skewed ones with outliers get the robust treatment, bounded ones min-max.
+STD_COLUMNS = ["hb", "peso_pre", "peso_post", "albuminemia", "calcemia"]
+
+ROBUST_COLUMNS = [
+    "ferritina",
+    "fosforemia",
+    "qb",
+    "uf",
+    "azotemia_pre",
+    "eta_accesso_giorni",
+    "bmi",
+    "transferrina",
+    "bcm_post",
+    "ffm_post",
+    "fm_post",
+    "pth",
+    "azotemia_post",
+    "alpha_eri",
+    "dosaggio_epoetina_alpha_mensile",
+    "vitamina_d",
+    "sideremia",
+    "fosfatasi_alcalina",
+    "alpha_epodose_weight",
 ]
 
-FINAL_FEATURES = NUMERIC_FEATURES + OHE_FEATURES
+MINMAX_COLUMNS = ["minuti_dialisi", "eta_paziente_anni", "tsat"]
 
-# Columns of the per-window metadata table: what identifies a window, as
-# opposed to what the network is trained on.
+# What identifies a row, as opposed to what the network is trained on. Kept
+# through the whole pipeline whatever features are selected: the grouping key,
+# the two timestamps, and what the event is.
 # `patient` and `event` together identify a series: `event` alone is NOT
-# unique across patients. `remaining_days` is deliberately absent, being
-# exactly (t_out - t).days.
+# unique across patients.
 META_COLUMNS = [
     "patient",  # patient id
+    "t_session",  # date of the dialysis session
+    "t_event",  # date of the adverse event that follows it
     "event",  # event id, unique only within a patient
-    "series_idx",  # position of the window inside its series
-    "series_len",  # number of sessions in the series
-    "t_start",  # date of the oldest session of the window (t = 0)
-    "t",  # date of the current session of the window (t = W-1)
-    "t_out",  # date of the event
+    "event_type",  # death, vascular access admission, other admission
 ]
