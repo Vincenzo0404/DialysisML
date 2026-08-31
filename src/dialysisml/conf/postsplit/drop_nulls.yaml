@@ -1,7 +1,11 @@
 # Defines the sequence of transformations to be applied to the splits.
-# Every entry is fitted on the training rows and applied to both sides.
-# Order matters: clipping before imputing keeps the medians inside the bounds.
+# No imputer: rows still missing a feature after sample-and-hold (a feature
+# never measured for that patient) are dropped instead of filled.
 fitted_transformations:
+  - _target_: dialysisml.pipeline.steps.drop_incomplete_rows
+    _partial_: true
+    columns: ${features:NUMERIC_FEATURES}
+
   # No columns listed: every numeric column, so a new feature is covered too.
   - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
     _partial_: true
@@ -9,12 +13,6 @@ fitted_transformations:
       _target_: dialysisml.preprocessing.Winsorizer
       lower: 0.01
       upper: 0.99
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
-    transformer:
-      _target_: sklearn.impute.SimpleImputer
-      strategy: median
 
   - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
     _partial_: true
@@ -34,10 +32,3 @@ fitted_transformations:
     transformer:
       _target_: sklearn.preprocessing.MinMaxScaler
 
-# Plain values, not an object: SlidingWindow takes them as keyword arguments.
-# Every column derived from the target belongs in target_columns, otherwise it
-# ends up among the features and leaks.
-window_conf:
-  size: 30
-  stride: 1
-  target_columns: [tte]

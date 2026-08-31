@@ -1,0 +1,31 @@
+# @package _global_
+
+# override keyword is required to override defaults group
+defaults:
+  - override /window_transformation@postsplit.window_transformation: regression
+  - override /presplit: tte_months_sh
+  - override /split: single
+  - override /postsplit: median
+
+experiment_name: check_variation_by_splits
+
+model:
+  hidden_layers: [8]
+  epochs: 70
+  learning_rate: 5e-4
+  score_metric:
+    _target_: dialysisml.metrics.mae
+    _partial_: True
+  
+
+# `choice(...)` is only read here and on the CLI; in a plain config value it
+# stays a literal string. The swept keys come from ffnn_baseline.yaml and
+# config.yaml, so they need no starting value here.
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      split.seed: choice(1,2,3,4,5,6,7,8,9,10)  
+      
+
+      

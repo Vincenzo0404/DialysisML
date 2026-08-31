@@ -1,0 +1,20 @@
+# @package _global_
+# The floor for ffnn_regr: same protocol, constant prediction instead of a model.
+# The overrides are repeated rather than shared: if they drift apart, the
+# baseline stops being a floor for those runs.
+defaults:
+  - override /window_transformation@postsplit.window_transformation: regression
+  - override /presplit: tte_months_sh
+  - override /split: single
+  - override /postsplit: median
+  - override /model: estimator_baseline
+
+experiment_name: tte_regr_months
+
+# One baseline per window size: the window decides which test windows exist,
+# so a floor measured at 30 does not hold at 40.
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      window_conf.size: choice(30,40)

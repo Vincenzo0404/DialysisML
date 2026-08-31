@@ -37,16 +37,16 @@ RAW_FEATURES = [
 # what to leave out rather than what to keep means a new column added to the
 # view flows in on its own, without touching this file.
 EXCLUDED_FEATURES = [
-    "score_fav",
-    "score_cvc",
-    "colesterolemia",
+    # "score_fav",
+    # "score_cvc",
+    # "colesterolemia",
     "fosfalcindex",
-    "a_v",
-    "pa_qb",
-    "pv_qb",
+    # "a_v",
+    # "pa_qb",
+    # "#pv_qb",
     "mesi_fav",
-    "arter",
-    "vena",
+    # "arter",
+    # "vena",
     "duration",
 ]
 

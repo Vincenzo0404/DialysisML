@@ -1,0 +1,36 @@
+# Defines the sequence of transformations to be applied to the splits.
+# Scaling before imputing here, unlike w30median: KNN measures distance across
+# every numeric column at once, so features on different raw scales would
+# dominate the neighbor search. A per-column median has no such problem.
+fitted_transformations:
+  # No columns listed: every numeric column, so a new feature is covered too.
+  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
+    _partial_: true
+    transformer:
+      _target_: dialysisml.preprocessing.Winsorizer
+      lower: 0.01
+      upper: 0.99
+
+  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
+    _partial_: true
+    columns: ${features:ROBUST_COLUMNS}
+    transformer:
+      _target_: sklearn.preprocessing.RobustScaler
+
+  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
+    _partial_: true
+    columns: ${features:STD_COLUMNS}
+    transformer:
+      _target_: sklearn.preprocessing.StandardScaler
+
+  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
+    _partial_: true
+    columns: ${features:MINMAX_COLUMNS}
+    transformer:
+      _target_: sklearn.preprocessing.MinMaxScaler
+
+  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
+    _partial_: true
+    transformer:
+      _target_: sklearn.impute.KNNImputer
+      n_neighbors: 5

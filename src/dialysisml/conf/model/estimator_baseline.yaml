@@ -1,0 +1,14 @@
+# The floor: a constant fitted on y_train alone. Median minimises MAE -- under
+# another loss the optimal constant sits elsewhere.
+_target_: dialysisml.adapters.EstimatorAdapter
+
+# _partial_ is required: without it Hydra would call numpy.median here.
+estimator:
+  _target_: numpy.median
+  _partial_: true
+
+# Which metric the constant is judged by: it optimises nothing, so unlike a loss
+# this has to be stated. Sweep it to get a floor for each score.
+score_metric:
+  _target_: dialysisml.metrics.mae
+  _partial_: true

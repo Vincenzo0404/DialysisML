@@ -1,0 +1,14 @@
+# Steps order defines presplit pipeline transformations order application
+steps:
+  - _target_: dialysisml.pipeline.steps.drop_columns
+    _partial_: true
+    columns: ${features:EXCLUDED_FEATURES}
+
+  - _target_: dialysisml.pipeline.steps.compute_tte
+    _partial_: true
+    min_days: 1
+
+  # Last: categories are inferred, so every fold gets the same columns.
+  - _target_: dialysisml.pipeline.steps.one_hot_encode
+    _partial_: true
+    columns: ${features:CATEGORICAL_FEATURES}

@@ -6,18 +6,22 @@ __pycache__/
 .claude/
 .vscode/
 .pytest_cache/
+docker-compose-datalake.yml
+
 
 data/
 notebooks/
 results/
 analysis/
+experimental/
 
 .env
 *.bak
 outputs/
 .hydra/
-mlflow.db
-
+mlflow.db*
+*.log
+start.sh
 
 #Hydra
 

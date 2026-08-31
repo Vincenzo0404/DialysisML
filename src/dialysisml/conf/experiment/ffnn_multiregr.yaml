@@ -1,0 +1,26 @@
+# @package _global_
+# The same depths and losses, on nested 30/60/90 windows instead of one fit.
+defaults:
+  - override /window_transformation@postsplit.window_transformation: multi_size_regression
+  - override /postsplit: median
+  - override /split: single
+
+model:
+  epochs: 70
+  score_metric:
+    _target_: dialysisml.metrics.mae
+    _partial_: true
+
+window_conf:
+  size: 90
+  learning_rate: 5e-4
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      model.hidden_layers: choice([],[8],[16,8],[32,16,8])
+      # ._target_ , not the whole node: overriding `score_metric` itself would
+      # replace the dict with a string, and a string is not callable
+      model.score_metric._target_: choice(dialysisml.metrics.mape,dialysisml.metrics.mae,dialysisml.metrics.huber)
+

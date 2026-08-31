@@ -1,9 +1,0 @@
-# @package _global_
-# Same window length, one linear fit: isolates the effect of the multi-scale
-# transformer from that of the longer window.
-defaults:
-  - override /window_transformation@postsplit.window_transformation: single
-
-postsplit:
-  window_conf:
-    size: 90

@@ -24,12 +24,6 @@ DATA_PATH.mkdir(parents=True, exist_ok=True)
 RAW_SESSIONS_PATH = DATA_PATH / "df_sessions.parquet"
 RAW_EVENTS_PATH = DATA_PATH / "df_events.parquet"
 
-ANALYSIS_PATH = BASE_DIR.parent.parent.parent / "analysis"
-ANALYSIS_PATH.mkdir(parents=True, exist_ok=True)
-
-RESULTS_PATH = BASE_DIR.parent.parent.parent / "results"
-RESULTS_PATH.mkdir(parents=True, exist_ok=True)
-
 # Il file store ./mlruns e' in maintenance mode da MLflow 3: i metadati (run,
 # metriche, parametri) stanno ora in mlflow.db, migrati con `mlflow migrate-filestore`.
 # La cartella mlruns/ resta perche' continua a contenere gli artifact, referenziati

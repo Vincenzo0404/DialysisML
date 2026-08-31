@@ -1,8 +1,8 @@
 defaults:
   - base_config
-  - presplit: tte_s&h
+  - presplit: tte_sh
   - split: single
-  - postsplit: w30
+  - postsplit: median
   # its own group, so the transformer and the window size vary independently
   - window_transformation@postsplit.window_transformation: regression
   - model: ffnn_baseline
@@ -13,9 +13,11 @@ fromdb: false
 
 seed: 42
 
-experiment_name: tte_FFNN
-
-# Reported every epoch, alongside the training loss.
+# Which metrics to report for each epoch
 metrics:
   - {_target_: dialysisml.metrics.mae, _partial_: true}
   - {_target_: dialysisml.metrics.mape, _partial_: true}
+
+
+window_conf:
+  size: 30

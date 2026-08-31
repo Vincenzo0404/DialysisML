@@ -7,6 +7,10 @@ steps:
   - _target_: dialysisml.pipeline.steps.sample_hold
     _partial_: true
 
+  - _target_: dialysisml.pipeline.steps.flag_missing_values
+    _partial_: true
+    columns: ${features:NUMERIC_FEATURES}
+
   - _target_: dialysisml.pipeline.steps.compute_tte
     _partial_: true
     min_days: 1

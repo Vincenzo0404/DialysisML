@@ -48,7 +48,6 @@ class PostsplitConfig:
     """
 
     fitted_transformations: list[Any] = field(default_factory=list)
-    window_conf: WindowConfig = field(default_factory=WindowConfig)
     window_transformation: Any = None
 
 
@@ -57,10 +56,13 @@ class Config:
     presplit: PresplitConfig = field(default_factory=PresplitConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     postsplit: PostsplitConfig = field(default_factory=PostsplitConfig)
+    # Top level: shared by every postsplit variant, not one thing to repeat
+    # inside each of them.
+    window_conf: WindowConfig = field(default_factory=WindowConfig)
     # The adapter to train, chosen by the `model` config group.
     model: Any = None
     metrics: list[Any] = field(default_factory=list)
-    experiment_name: str = "dialysis_tte"
+    experiment_name: str = "scratch"
     fromdb: bool = False
     seed: int = 42
 

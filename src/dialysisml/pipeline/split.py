@@ -38,7 +38,7 @@ class PatientGroupSplit:
                 n_splits=1, train_size=self.train_size, random_state=self.seed
             )
         else:
-            splitter = GroupKFold(n_splits=self.k)
+            splitter = GroupKFold(n_splits=self.k, shuffle=True, random_state=self.seed)  # type: ignore
 
         yield from splitter.split(groups, groups=groups)
 

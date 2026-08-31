@@ -48,12 +48,12 @@ def rmse(y_hat: torch.Tensor, y_true: torch.Tensor) -> torch.Tensor:
     return torch.sqrt(torch.mean((y_true - y_hat) ** 2))
 
 
-def huber(y_hat: torch.Tensor, y_true: torch.Tensor, delta: float = 50.0) -> torch.Tensor:
-    """
-    Huber loss: quadratic within `delta` days of the target, linear beyond it.
+def huber(y_hat: torch.Tensor, y_true: torch.Tensor, delta: float = 4.0) -> torch.Tensor:
+    """Huber loss: quadratic within `delta` of the target, linear beyond it.
 
-    Behaves like RMSE for small errors and like MAE for large ones, so a handful
-    of far-off patients cannot dominate the gradient. `delta` is in days.
+    Like RMSE for small errors, like MAE for large ones. `delta` is in the
+    target's own unit: 4.0 is the MAD of tte in months. On a target in days it
+    must be rescaled, or every error falls inside it and this becomes MSE/2.
     """
     err = y_true - y_hat
     abs_err = torch.abs(err)
