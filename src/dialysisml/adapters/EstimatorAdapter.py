@@ -20,6 +20,10 @@ class EstimatorAdapter(ModelAdapter):
     # no loss to optimise, so what it is judged by is stated instead of derived
     score_metric: Metric = mae
 
+    @property
+    def score_metric_name(self) -> str:
+        return metric_name(self.score_metric)
+
     def __str__(self) -> str:
         # metric_name despite the name: an estimator is a partial too
         return f"Const_{metric_name(self.estimator)}"
@@ -49,6 +53,7 @@ class EstimatorAdapter(ModelAdapter):
             preds_train=torch.full_like(y_train_t, constant),
             y_test=y_test_t,
             preds_test=torch.full_like(y_test_t, constant),
+            score_metric=self.score_metric,
         )
         # A single row: there is nothing to iterate. The rest of the pipeline
         # reads an epoch frame either way, so nothing downstream special-cases it.

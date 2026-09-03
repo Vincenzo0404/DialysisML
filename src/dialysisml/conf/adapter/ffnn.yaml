@@ -12,6 +12,6 @@ random_seed: ${seed}
 
 # _partial_ is required: without it Hydra would call the loss instead of
 # passing it, and the adapter would receive its return value.
-score_metric:
+loss_function:
   _target_: dialysisml.metrics.mape
   _partial_: true

@@ -16,9 +16,9 @@ def drop_columns(
     Dropping rather than selecting means a column added to the materialized
     view reaches the model on its own; name it here when it should not.
     """
-    columns = set(columns)
+    cols = set(columns)
 
-    protected = columns & set(meta_columns)
+    protected = cols & set(meta_columns)
     if protected:
         raise ValueError(f"meta columns cannot be dropped: {sorted(protected)}")
 
@@ -26,7 +26,7 @@ def drop_columns(
     if missing_meta:
         raise ValueError(f"meta columns not in the data: {missing_meta}")
 
-    unknown = columns - set(df.columns)
+    unknown = cols - set(df.columns)
     if unknown:
         raise ValueError(f"columns to drop not in the data: {sorted(unknown)}")
 

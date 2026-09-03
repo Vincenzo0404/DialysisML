@@ -1,0 +1,18 @@
+# @package _global_
+# Depth sweep on the flattened window features.
+defaults:
+  # the folder is spelled out because a relative default resolves against the
+  # config group, `formulation`, not against this directory
+  - first_event_cap365/_base
+  - override /adapter: ffnn
+  - _self_
+
+# postsplit, split and the window transformer are left to config.yaml: they are
+# swept, not part of the formulation, and every run logs them as params anyway.
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      adapter.hidden_layers: choice([],[10],[20],[30],[40])
+      adapter.loss_function._target_: choice(dialysisml.metrics.msle)

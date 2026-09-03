@@ -53,15 +53,21 @@ class PostsplitConfig:
 
 @dataclass
 class Config:
+    # The step producing the raw frame. Part of the formulation rather than a
+    # config group: which events count as adverse is part of what y means.
+    data_source: Any = None
     presplit: PresplitConfig = field(default_factory=PresplitConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     postsplit: PostsplitConfig = field(default_factory=PostsplitConfig)
     # Top level: shared by every postsplit variant, not one thing to repeat
     # inside each of them.
     window_conf: WindowConfig = field(default_factory=WindowConfig)
-    # The adapter to train, chosen by the `model` config group.
-    model: Any = None
+    # An adapter, not a model: it owns the training loop and the scoring, and
+    # the network it may wrap lives in `dialysisml.models`.
+    adapter: Any = None
     metrics: list[Any] = field(default_factory=list)
+    # Fallback only: the MLflow experiment is normally the formulation folder,
+    # so nothing has to keep two files saying the same name.
     experiment_name: str = "scratch"
     fromdb: bool = False
     seed: int = 42

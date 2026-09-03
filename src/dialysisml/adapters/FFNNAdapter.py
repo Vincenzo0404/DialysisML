@@ -8,7 +8,7 @@ import torch.optim as optim
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-from dialysisml.adapters import ModelAdapter
+from dialysisml.adapters.ModelAdapter import ModelAdapter, metric_name
 from dialysisml.metrics import Metric, mape
 from dialysisml.models import FeedForwardNN
 
@@ -23,15 +23,24 @@ class FFNNAdapter(ModelAdapter):
     to give them, without a second class to declare them in.
     """
 
-    # Architettura a imbuto (es. 132 -> 128 -> 64 -> 32)
     hidden_layers: tuple[int, ...] = (128, 64, 32)
     dropout: float = 0.2
-    learning_rate: float = 0.0005
+    learning_rate: float = 5e-4
     weight_decay: float = 1e-4
     batch_size: int = 64
     epochs: int = 40
     random_seed: int = 42
-    score_metric: Metric = mape
+    loss_function: Metric = mape
+
+    @property
+    def score_metric_name(self) -> str:
+        """What it is judged by is what it optimises.
+
+        A property, not a class attribute: read once at class level it would
+        freeze on the default and misreport every run that configures a
+        different loss.
+        """
+        return metric_name(self.loss_function)
 
     def __str__(self) -> str:
         return f"FFNN_hl={list(self.hidden_layers)}"
@@ -53,8 +62,7 @@ class FFNNAdapter(ModelAdapter):
         X_test_scaled = scaler.transform(X_test)
 
         #
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        logger.info(f"Using {device} to train {str(self)}.")
+        device = torch.device("cpu")
 
         X_train_t = torch.tensor(X_train_scaled, dtype=torch.float32).to(device)
         y_train_t = torch.tensor(y_train, dtype=torch.float32).reshape(-1).to(device)
@@ -64,7 +72,7 @@ class FFNNAdapter(ModelAdapter):
         dataset = TensorDataset(X_train_t, y_train_t)
         dataloader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True)
 
-        # 4. INIZIALIZZAZIONE MODELLO
+        # initialize model
         input_dim = X_train_scaled.shape[1]
         model = FeedForwardNN(
             input_dim=input_dim,
@@ -77,12 +85,12 @@ class FFNNAdapter(ModelAdapter):
             lr=self.learning_rate,
             weight_decay=self.weight_decay,
         )
-        patience = 20
+        patience = 15
         min_delta = 0.01
         best_test_loss = float("inf")
         best_epoch = 0
         epochs_without_improvement = 0
-
+        # training loop
         records = []
         for epoch in range(1, self.epochs + 1):
             model.train()
@@ -91,7 +99,7 @@ class FFNNAdapter(ModelAdapter):
             for batch_X, batch_y in dataloader:
                 optimizer.zero_grad()
                 batch_preds = model(batch_X)
-                loss = self.score_metric(batch_preds, batch_y)
+                loss = self.loss_function(batch_preds, batch_y)
                 loss.backward()
                 optimizer.step()
                 train_loss += loss.item() * batch_X.size(0)
@@ -105,11 +113,8 @@ class FFNNAdapter(ModelAdapter):
                 test_preds_t: torch.Tensor = model(X_test_t)
 
                 # Calcoliamo la loss ufficiale sul Test set
-                test_loss = float(self.score_metric(test_preds_t, y_test_t))
+                test_loss = float(self.loss_function(test_preds_t, y_test_t))
 
-            # L'early stopping segue la loss di TEST: quella di training cala
-            # anche mentre il modello va in overfitting, quindi la patience su
-            # di essa non scatta mai quando la generalizzazione si e' fermata.
             if test_loss < best_test_loss * (1 - min_delta):
                 best_test_loss = test_loss
                 best_epoch = epoch
@@ -125,6 +130,7 @@ class FFNNAdapter(ModelAdapter):
                 y_test=y_test_t,
                 preds_test=test_preds_t,
                 metrics=metrics,
+                score_metric=self.loss_function,
             )
 
             records.append(record)

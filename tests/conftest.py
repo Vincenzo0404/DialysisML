@@ -56,6 +56,9 @@ def make_merged(
                         "t_event": t_event,
                         "event": f"E{block}",
                         "event_type": "death",
+                        # every session here is followed by an event: the frame
+                        # is what `read_raw_data` emits, and that column is meta
+                        "has_event": True,
                     }
                 )
 

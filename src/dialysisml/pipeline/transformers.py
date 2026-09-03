@@ -31,7 +31,9 @@ def linear_fit(X: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     if W < 2:
         raise ValueError(f"a line needs at least 2 points, got a window of {W}")
 
-    t = np.arange(W)
+    # float32, not the default int64: an int `t` promotes every (N, W, F)
+    # temporary below to float64 and doubles the peak memory of the fit
+    t = np.arange(W, dtype=np.float32)
     t_mean = t.mean()
     y_mean = X.mean(axis=1)
 

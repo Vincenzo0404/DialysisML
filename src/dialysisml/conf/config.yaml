@@ -1,12 +1,16 @@
 defaults:
   - base_config
-  - presplit: tte_sh
   - split: single
   - postsplit: median
   # its own group, so the transformer and the window size vary independently
   - window_transformation@postsplit.window_transformation: regression
-  - model: ffnn_baseline
+  - adapter: ffnn
+  # before the formulation, not last: a formulation has to win over the
+  # defaults set here
   - _self_
+  # `???`, no default: the presplit lives inside a formulation, so composing
+  # without one leaves the pipeline empty and the run dies much further down
+  - formulation: ???
 
 # Read from the database instead of the cached parquet files.
 fromdb: false

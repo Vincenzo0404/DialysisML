@@ -9,6 +9,8 @@ from typing import Any, Callable, Optional, Sequence
 
 import pandas as pd
 
+from dialysisml.pipeline.SlidingWindow import GROUP_COLUMNS
+
 Step = Callable[..., pd.DataFrame]
 
 logger = logging.getLogger(__name__)
@@ -158,13 +160,6 @@ class MetricCollector:
 
         frame = self.to_frame()
         mlflow.log_text(frame.to_csv(index=False), artifact_name)
-        if frame.empty:
-            return
-
-        last = frame.iloc[-1]
-        for measure in frame.columns.drop(["idx", "seconds"], errors="ignore"):
-            if pd.notna(last[measure]):
-                mlflow.log_metric(f"final_{measure}", float(last[measure]))
 
     def to_mlflow_scalars(self, prefix: str = "") -> None:
         """Every record as a `{prefix}{idx}_{measure}` single-valued metric."""
@@ -177,21 +172,51 @@ class MetricCollector:
 
 
 # custom metrics
-
-
 def unique_values(df: pd.DataFrame, col: str) -> int:
     return df[col].nunique(dropna=True)
 
 
 def count_groups(df: pd.DataFrame, by: Sequence[str]) -> int:
-    return df.groupby(by=list(by)).ngroups
+    # dropna=False or a censored series, whose `event` is null, is not counted
+    return df.groupby(by=list(by), dropna=False).ngroups
 
+
+def column_stat(
+    df: pd.DataFrame, *, col: str, stat: Callable[[pd.Series], Any]
+) -> Optional[float]:
+    """One statistic of one column, or None where the column is not there yet.
+
+    The target is built partway through the presplit, so the steps before it
+    have nothing to describe. None leaves those cells empty rather than
+    failing, the same way a step that drops a column does.
+    """
+    if col not in df.columns:
+        return None
+    return float(stat(df[col]))
+
+
+# The target's shape, step by step. One column per statistic rather than a
+# `describe` off to the side: which step flattens the distribution is the thing
+# worth seeing, and that only shows up next to the row counts that explain it.
+# `p25` and not `25%`: MLflow rejects `%` in a metric name.
+TTE_STATS: dict[str, Callable[[pd.Series], Any]] = {
+    "min": pd.Series.min,
+    "p25": lambda values: values.quantile(0.25),
+    "p50": lambda values: values.quantile(0.50),
+    "p75": lambda values: values.quantile(0.75),
+    "max": pd.Series.max,
+    "mean": pd.Series.mean,
+    "std": pd.Series.std,
+}
 
 # What a frame is worth measuring by, wherever it appears in the pipeline.
 FRAME_METRICS: dict[str, Callable] = {
     "rows": len,
     "patients": partial(unique_values, col="patient"),
-    "series": partial(count_groups, by=["patient", "event"]),
+    **{
+        f"tte_{name}": partial(column_stat, col="tte", stat=stat)
+        for name, stat in TTE_STATS.items()
+    },
 }
 
 
@@ -240,99 +265,3 @@ def aggregate_folds(folds: Sequence[MetricCollector]) -> MetricCollector:
             )
 
     return collector
-
-
-# -- cross-run export -----------------------------------------------------
-# Nothing here aggregates: `search_runs` already returns one row per run, and
-# `load_table` already concatenates a table artifact across runs. The only work
-# left is naming the columns that tell the runs apart and writing the files.
-
-# What identifies a run in the concatenated tables. `search_runs` column names,
-# so anything else it returns (`params.postsplit`, `tags.experiment_file`) can be
-# added here.
-RUN_IDENTITY = [
-    "run_id",
-    "tags.mlflow.runName",
-    "tags.sweep",
-    "params.presplit",
-    "params.window_transformation",
-    "params.window_size",
-    "params.model.hidden_layers",
-]
-
-
-def sweep_report(
-    experiment: str,
-    sweep: Optional[str] = None,
-    out_dir: str | Path = "results",
-    rank_by: str = "metrics.`test_mae_best_value`",
-) -> dict[str, pd.DataFrame]:
-    """The cross-run CSVs: the leaderboard, the summaries, the epochs.
-
-    `sweep` narrows to one launch (the `sweep` tag, `<date>/<time>`); without it
-    every run of the experiment is reported.
-    """
-    import mlflow
-
-    # load_table reads the *active* experiment, so this is not just a convenience
-    mlflow.set_experiment(experiment)
-    filter_string = f"tags.sweep = '{sweep}'" if sweep else ""
-
-    # one row per run, params and metrics as columns: this is the leaderboard,
-    # and the same table the UI shows
-    leaderboard = mlflow.search_runs(
-        experiment_names=[experiment],
-        filter_string=filter_string,
-        order_by=[f"{rank_by} ASC"],
-    )
-    assert isinstance(leaderboard, pd.DataFrame)
-    if leaderboard.empty:
-        raise ValueError(f"no runs in {experiment!r} matching {filter_string!r}")
-
-    run_ids = leaderboard["run_id"].tolist()
-    identity = [c for c in RUN_IDENTITY if c in leaderboard.columns]
-
-    frames = {"sweep_leaderboard": leaderboard}
-    for name, artifact in (
-        ("sweep_metrics_aggregated", "run_metrics_aggregated.json"),
-        ("sweep_epochs_raw", "epochs.json"),
-    ):
-        frames[name] = mlflow.load_table(artifact, run_ids, extra_columns=identity)
-
-    out_dir = Path(out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
-    for name, frame in frames.items():
-        frame.to_csv(out_dir / f"{name}.csv", index=False)
-        logger.info("%s: %d righe -> %s", name, len(frame), out_dir / f"{name}.csv")
-
-    return frames
-
-
-if __name__ == "__main__":
-    import argparse
-
-    from dialysisml import config
-
-    parser = argparse.ArgumentParser(description=sweep_report.__doc__)
-    parser.add_argument("--experiment", default="tte_regression")
-    parser.add_argument("--sweep", help="tag `sweep`, es. 2026-08-29/10-15-00")
-    parser.add_argument("--out-dir", default="results")
-    parser.add_argument("--rank-by", default="metrics.`test_score_best_value`")
-    args = parser.parse_args()
-
-    logging.basicConfig(level=logging.INFO, format="%(message)s")
-
-    import mlflow
-
-    mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
-    frames = sweep_report(args.experiment, args.sweep, args.out_dir, args.rank_by)
-
-    # the leaderboard carries every param and metric MLflow has; on a terminal
-    # only what tells the runs apart and what they are ranked by is readable.
-    # The CSV keeps the rest.
-    board = frames["sweep_leaderboard"]
-    shown = [c for c in RUN_IDENTITY if c in board.columns and c != "run_id"]
-    # search_runs returns metrics in no particular order; sorted, the measures of
-    # one metric land next to each other
-    shown += sorted(c for c in board.columns if c.startswith("metrics.") and "/" not in c)
-    print(board[shown].to_string(index=False, float_format=lambda v: f"{v:.3f}"))

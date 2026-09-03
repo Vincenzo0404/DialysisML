@@ -38,9 +38,9 @@ class ModelAdapter(ABC):
     def __str__(self) -> str:
         pass
 
-    score_metric: Metric
-
-    """The measure this model is judged by, reported as `test_score_*`."""
+    # The measure this model is judged by, reported as `test_score_*`. Only the
+    # name: an adapter with a loss derives it from there, one without states it.
+    score_metric_name: str
 
     def compute_metrics_record(
         self,
@@ -50,14 +50,19 @@ class ModelAdapter(ABC):
         preds_train: torch.Tensor,
         y_test: torch.Tensor,
         preds_test: torch.Tensor,
+        score_metric: Metric | None = None,
     ) -> dict:
         """Metrics for both sides, plus the score the model is judged by.
 
-        The score is folded in by name, not identity: Hydra builds it and the
-        metrics as separate partials, and the name is what keys the record.
+        `score_metric` is the callable behind `score_metric_name`, passed by the
+        adapter that has one: the base knows the name only, and a name cannot be
+        evaluated. Folded in by name, not identity, because Hydra builds it and
+        the metrics as separate partials.
         """
-        if metric_name(self.score_metric) not in map(metric_name, metrics):
-            metrics = [*metrics, self.score_metric]
+        if score_metric is not None and metric_name(score_metric) not in map(
+            metric_name, metrics
+        ):
+            metrics = [*metrics, score_metric]
 
         record: dict[str, float] = {"epoch": iteration}
 

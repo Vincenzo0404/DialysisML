@@ -6,7 +6,7 @@ import pandas as pd
 from dialysisml.features import META_COLUMNS
 
 # What makes a series: windows are cut inside one, never across two.
-GROUP_COLUMNS = ["patient", "event"]
+GROUP_COLUMNS = ["patient", "t_event"]
 TIME_COLUMN = "t_session"
 
 
@@ -93,7 +93,7 @@ class SlidingWindow:
             yield values[start : end : self.stride], targets[end - 1]
 
     def materialize(self) -> tuple[np.ndarray, np.ndarray]:
-        """The whole dataset at once, for estimators that cannot be fed in parts."""
+        """The whole dataset at once."""
         if len(self) == 0:
             raise ValueError("no series long enough to produce a window")
 

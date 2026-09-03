@@ -1,0 +1,24 @@
+# The adapter takes its hyperparameters directly: a sweep overrides
+# `model.hidden_size`, not `model.model_config.hidden_size`.
+_target_: dialysisml.adapters.LSTMAdapter
+
+# Two scalars rather than a list of widths: nn.LSTM stacks layers of the same
+# size. One layer to start — the recurrence over the window is already the
+# depth that matters, and a second one doubles the parameters.
+hidden_size: 32
+num_layers: 1
+
+dropout: 0.4
+learning_rate: 5e-4
+weight_decay: 1e-4
+batch_size: 32
+epochs: 70
+random_seed: ${seed}
+
+# mae, not mape as in ffnn_baseline: under mape the network collapses to a
+# constant, so it is not a default a new model should inherit.
+# _partial_ is required: without it Hydra would call the metric instead of
+# passing it, and the adapter would receive its return value.
+score_metric:
+  _target_: dialysisml.metrics.mae
+  _partial_: true

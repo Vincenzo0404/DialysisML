@@ -1,16 +1,21 @@
 """Entry point: presplit, patient-grouped split, per-fold pipeline, training.
 
-One model per run: sweep with `--multirun model.dropout=0.0,0.3`.
+A run needs a formulation, which is the target it trains on and the MLflow
+experiment it lands in: `formulation=first_event_cap365/ffnn`. One adapter per
+run: sweep with `--multirun adapter.dropout=0.0,0.3`.
 """
 
 import logging
 import time
-from functools import partial
+import warnings
 from pathlib import Path
 
 import hydra
 import mlflow
 import pandas as pd
+
+pd.options.mode.copy_on_write = True  # ensures copies are made only when really needed
+
 from hydra.core.hydra_config import HydraConfig
 from hydra.types import RunMode
 from hydra.utils import instantiate
@@ -18,12 +23,12 @@ from mlflow.data.pandas_dataset import from_pandas
 from omegaconf import DictConfig, OmegaConf
 
 from dialysisml import config, features
-from dialysisml.adapters import ModelAdapter, metric_name
+from dialysisml.adapters import ModelAdapter
 from dialysisml.conf.schemas import register
 from dialysisml.pipeline.SlidingWindow import SlidingWindow
-from dialysisml.pipeline.steps.read_raw_data import read_raw_data
 from dialysisml.reporting import (
     aggregate_folds,
+    describe_columns,
     epochs_collector,
     metadata_collector,
 )
@@ -33,6 +38,10 @@ register()
 # hydra.main installs its own logging config, so the level and the handler are
 # already set by the time main runs.
 logger = logging.getLogger(__name__)
+
+# The config group holding the formulations. Named once: it appears both as a
+# key of `runtime.choices` and as the directory the experiment name comes from.
+FORMULATION_GROUP = "formulation"
 
 # Lets a YAML write `columns: ${features:ROBUST_COLUMNS}`, so the column lists
 # stay defined only in features.py instead of being duplicated per config.
@@ -54,9 +63,6 @@ def log_results(results: pd.DataFrame, fold: int) -> None:
     mlflow.log_table(results.assign(fold=fold), "epochs.json")
 
 
-import warnings
-
-
 def log_dataset(df: pd.DataFrame, name: str):
     with warnings.catch_warnings():
         warnings.filterwarnings(
@@ -71,14 +77,27 @@ def choice_params(cfg: DictConfig) -> dict[str, str]:
     choices = HydraConfig.get().runtime.choices
     params: dict[str, str] = {}
     for key, value in choices.items():
-        # the experiment file is provenance, not a modelling choice: it goes to a tag
-        if key.startswith("hydra/") or key == "experiment":
+        # the formulation is not a modelling choice within its own experiment:
+        # it is the experiment, and the sweep file is already a tag
+        if key.startswith("hydra/") or key.startswith(FORMULATION_GROUP):
             continue
         # keep the group, drop where it lands: MLflow rejects `@` in a param name
         params[key.partition("@")[0]] = value
 
     params["window_size"] = cfg.window_conf.size
     return params
+
+
+def formulation_choice() -> tuple[str, str]:
+    """`(formulation, sweep file)` behind the `formulation=` option.
+
+    The directory is the MLflow experiment: every sweep inside one shares the
+    target, so grouping by folder is what makes the runs comparable — and
+    nothing has to repeat an experiment name that two files could spell apart.
+    """
+    choice = str(HydraConfig.get().runtime.choices.get(FORMULATION_GROUP, ""))
+    formulation, _, sweep_file = choice.partition("/")
+    return formulation, sweep_file
 
 
 def sweep_id() -> str:
@@ -94,58 +113,53 @@ def sweep_id() -> str:
     return "/".join(output_dir.parts[-2:])
 
 
-def model_params(model: DictConfig) -> dict[str, str]:
+def adapter_params(adapter: DictConfig) -> dict[str, str]:
     """The adapter's hyperparameters, as sortable MLflow columns.
 
     From the config node, not the adapter: `_target_` and the nested partials
     read better as the names of what they point at.
     """
     params: dict[str, str] = {}
-    container = OmegaConf.to_container(model, resolve=True)
-    assert isinstance(container, dict), "model must be a mapping"
+    container = OmegaConf.to_container(adapter, resolve=True)
+    assert isinstance(container, dict), "adapter must be a mapping"
     for key, value in container.items():
         if str(key).startswith("_"):
             continue
         # a nested _target_ (the loss, say) reads better as what it points at
         if isinstance(value, dict) and "_target_" in value:
             value = value["_target_"].rsplit(".", 1)[-1]
-        params[f"model.{key}"] = value
+        params[f"adapter.{key}"] = value  # type: ignore
     return params
 
 
 @hydra.main(version_base=None, config_path="conf", config_name="config")
 def main(cfg: DictConfig) -> None:
-    logger.info("resolved config:\n%s", OmegaConf.to_yaml(cfg))
-
     mlflow.set_tracking_uri(config.MLFLOW_TRACKING_URI)
-    mlflow.set_experiment(cfg.experiment_name)
+    # the formulation folder, not a name written in the YAML: `experiment_name`
+    # is only the fallback for a run composed without one
+    formulation, sweep_file = formulation_choice()
+    mlflow.set_experiment(formulation or cfg.experiment_name)
 
-    # once, not per fold: it holds no state between folds, and the run name has
-    # to exist before the run is opened
-    adapter: ModelAdapter = instantiate(cfg.model)
+    # adapter keeps no state between calls to `train` method
+    adapter: ModelAdapter = instantiate(cfg.adapter)
 
     with mlflow.start_run(run_name=str(adapter)):
+
         mlflow.log_params(choice_params(cfg))
-        mlflow.log_params(model_params(cfg.model))
+        mlflow.log_params(adapter_params(cfg.adapter))
         # which measure test_score_* refers to, and the key to group runs by
-        mlflow.log_param("score_metric", metric_name(adapter.score_metric))
+        mlflow.log_param("score_metric", adapter.score_metric_name)
         # tags, not params: they say which launch a run came from, not what it is
-        mlflow.set_tags(
-            {
-                "sweep": sweep_id(),
-                "experiment_file": HydraConfig.get().runtime.choices.get(
-                    "experiment", ""
-                ),
-            }
-        )
+        mlflow.set_tags({"sweep": sweep_id(), "formulation_file": sweep_file})
         # resolve=True expands ${seed} and ${features:...}
         mlflow.log_dict(OmegaConf.to_container(cfg, resolve=True), "config.yaml")  # type: ignore
 
         collector = metadata_collector()
 
         # -- PRE SPLIT --
-        # partial, not a call: run() needs the step itself to time and name it
-        df = collector.run(partial(read_raw_data, fromdb=cfg.fromdb))
+        # a source step: `_partial_` binds every argument in the config, so
+        # run() gets something it can time and name and call with no frame
+        df = collector.run(instantiate(cfg.data_source))
         log_dataset(df, "raw_df")
 
         for step in instantiate(cfg.presplit.steps):
@@ -177,22 +191,30 @@ def main(cfg: DictConfig) -> None:
             windows_train = SlidingWindow(train, **window_conf)
             windows_test = SlidingWindow(test, **window_conf)
 
-            # apply window transformers
+            # apply window transformers if any is given
             transformer = instantiate(cfg.postsplit.window_transformation)
-            transformer.bind(windows_train.feature_columns)
             assert windows_train.feature_columns == windows_test.feature_columns
+            if transformer is not None:
+                transformer.bind(windows_train.feature_columns)
 
+            # one side at a time: a materialized block is (n, size, features) and
+            # the transformer allocates a multiple of it, so keeping train and
+            # test in that shape together is what runs the machine out of memory
             X_train, y_train = windows_train.materialize()
-            X_test, y_test = windows_test.materialize()
-            X_train, X_test = transformer.transform(X_train), transformer.transform(
-                X_test
-            )
+            if transformer is not None:
+                X_train = transformer.transform(X_train)
 
+            X_test, y_test = windows_test.materialize()
+            if transformer is not None:
+                X_test = transformer.transform(X_test)
+
+            # last axis, not the second: without a transformer the windows are
+            # still (n, size, features)
             fold_report.add_record(
-                train, idx="train", windows=len(X_train), features=X_train.shape[1]
+                train, idx="train", windows=len(X_train), features=X_train.shape[-1]
             )
             fold_report.add_record(
-                test, idx="test", windows=len(X_test), features=X_test.shape[1]
+                test, idx="test", windows=len(X_test), features=X_test.shape[-1]
             )
 
             # --- training ---
@@ -204,7 +226,7 @@ def main(cfg: DictConfig) -> None:
             fold_report.add_record(None, time.perf_counter() - started, idx="training")
             logger.info("fold %d:\n%s", fold, fold_report.to_console())
 
-            summary = epochs_collector(results, metric_name(adapter.score_metric))
+            summary = epochs_collector(results, adapter.score_metric_name)
             fold_summaries.append(summary)
             logger.info("fold %d results:\n%s", fold, summary.to_console())
 

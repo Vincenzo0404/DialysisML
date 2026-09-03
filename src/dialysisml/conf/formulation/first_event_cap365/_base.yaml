@@ -1,0 +1,58 @@
+# @package _global_
+# What y is: days to the patient's first adverse event, censored at one year,
+# read in months. Nothing about models or preprocessing -- those vary inside
+# this formulation, this is what every run in it shares.
+#
+# Written out instead of composed from a group: none of it is ever swept, and
+# once runs are logged under this name it has to stay frozen. A different
+# target is a new folder, not an edit here.
+
+# The source step, and the one deciding which events exist at all: `Decesso`
+# alone would be a different target, and so would keeping every event per
+# patient rather than the first.
+data_source:
+  _target_: dialysisml.pipeline.steps.read_raw_data
+  _partial_: true
+  fromdb: ${fromdb}
+  first_event_only: true
+  adv_event_types:
+    - Decesso
+    - Ricovero per accesso vascolare
+    - Ricovero per altro
+
+presplit:
+  # Steps order defines presplit pipeline transformations order application
+  steps:
+    - _target_: dialysisml.pipeline.steps.drop_columns
+      _partial_: true
+      columns: ${features:EXCLUDED_FEATURES}
+
+    - _target_: dialysisml.pipeline.steps.sample_hold
+      _partial_: true
+
+    - _target_: dialysisml.pipeline.steps.compute_tte
+      _partial_: true
+      min_tte: 1
+
+    # One-year horizon: censored series with less than that ahead of them go,
+    # everything reaching past it is truncated to it.
+    - _target_: dialysisml.pipeline.steps.filter_rows.drop_short_censored_sessions
+      _partial_: true
+      min_days: 365
+      cap_days: true
+
+    # Months: at day resolution the target is mostly noise. A coarser unit
+    # rescales every error logged under this name, so it belongs here and not
+    # in a sweep -- quarters would be a new formulation.
+    - _target_: dialysisml.pipeline.steps.target_engineering.scale_tte
+      _partial_: true
+      divisor: 30
+
+    # Last: categories are inferred, so every fold gets the same columns.
+    - _target_: dialysisml.pipeline.steps.one_hot_encode
+      _partial_: true
+      columns: ${features:CATEGORICAL_FEATURES}
+
+# Regression on the time alone: `has_event` stays out of the labels.
+window_conf:
+  target_columns: [tte]
