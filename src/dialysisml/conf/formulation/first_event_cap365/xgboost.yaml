@@ -1,0 +1,36 @@
+# @package _global_
+# Depth and regularisation. The effective sample is ~1200 train patients, not
+# the ~140k windows their sessions produce, and on the session-counted windows
+# this replaces, the default depth reached train MAE 1.36 against test 2.42 --
+# a gap wide enough to call it memorising. A tree free to go deep with no floor
+# on leaf size carves out one patient's sessions instead of a pattern several
+# share, so this leans shallow and adds a `min_child_weight` floor rather than
+# searching wider.
+defaults:
+  - first_event_cap365/_base
+  - override /adapter: xgboost
+  - _self_
+
+# More rounds than the adapter default, and more patience: a shallow tree
+# needs more of them to reach the same fit a deep one gets in fewer, and
+# early stopping decides when to stop regardless of the ceiling.
+adapter:
+  n_estimators: 800
+  early_stopping_rounds: 30
+
+# `reg:squaredlogerror`, not a literal MAPE objective: xgboost has no built-in
+# relative-error loss, and a hand-rolled one predicted from the same
+# near-zero-target rows that collapsed the FFNN under MAPE would likely
+# reproduce that collapse for the same reason, not a new one worth spending a
+# sweep on. squaredlogerror is the project's own answer to that failure mode
+# (see metrics.msle's docstring) in the form xgboost ships natively -- checked
+# beforehand on data shaped like this target for the NaN that an unguarded
+# log(1+pred) can produce when a prediction goes negative: none.
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      adapter.objective: choice(reg:absoluteerror, reg:squaredlogerror)
+      adapter.max_depth: choice(2, 3, 4, 6)
+      adapter.reg_lambda: choice(1.0, 10.0)
+      adapter.min_child_weight: choice(1.0, 50.0)

@@ -4,7 +4,6 @@
 fitted_transformations:
   - _target_: dialysisml.pipeline.steps.drop_incomplete_rows
     _partial_: true
-    columns: ${features:NUMERIC_FEATURES}
 
   # No columns listed: every numeric column, so a new feature is covered too.
   - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
@@ -13,22 +12,4 @@ fitted_transformations:
       _target_: dialysisml.preprocessing.Winsorizer
       lower: 0.01
       upper: 0.99
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
-    columns: ${features:ROBUST_COLUMNS}
-    transformer:
-      _target_: sklearn.preprocessing.RobustScaler
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
-    columns: ${features:STD_COLUMNS}
-    transformer:
-      _target_: sklearn.preprocessing.StandardScaler
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
-    columns: ${features:MINMAX_COLUMNS}
-    transformer:
-      _target_: sklearn.preprocessing.MinMaxScaler
 

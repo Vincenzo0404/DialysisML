@@ -1,0 +1,19 @@
+_target_: dialysisml.adapters.XGBoostAdapter
+
+n_estimators: 300
+max_depth: 6
+learning_rate: 0.05
+subsample: 0.8
+colsample_bytree: 0.8
+reg_lambda: 1.0
+min_child_weight: 1.0
+early_stopping_rounds: 20
+random_seed: ${seed}
+
+objective: reg:absoluteerror
+
+# Which metric it is judged by: xgboost optimises its own objective, not one
+# of dialysisml.metrics, so unlike FFNNAdapter's loss this has to be stated.
+score_metric:
+  _target_: dialysisml.metrics.mae
+  _partial_: true

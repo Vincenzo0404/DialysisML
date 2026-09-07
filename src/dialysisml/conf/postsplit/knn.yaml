@@ -13,24 +13,6 @@ fitted_transformations:
 
   - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
     _partial_: true
-    columns: ${features:ROBUST_COLUMNS}
-    transformer:
-      _target_: sklearn.preprocessing.RobustScaler
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
-    columns: ${features:STD_COLUMNS}
-    transformer:
-      _target_: sklearn.preprocessing.StandardScaler
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
-    columns: ${features:MINMAX_COLUMNS}
-    transformer:
-      _target_: sklearn.preprocessing.MinMaxScaler
-
-  - _target_: dialysisml.pipeline.steps.apply_sklearn_transformer
-    _partial_: true
     transformer:
       _target_: sklearn.impute.KNNImputer
       n_neighbors: 5

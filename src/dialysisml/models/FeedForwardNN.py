@@ -1,4 +1,5 @@
 import torch.nn as nn
+from torch import Tensor
 
 
 class FeedForwardNN(nn.Module):
@@ -10,16 +11,17 @@ class FeedForwardNN(nn.Module):
 
         for hidden_dim in hidden_layers:
             layers.append(nn.Linear(current_dim, hidden_dim))
-            layers.append(nn.BatchNorm1d(hidden_dim))
             layers.append(nn.ReLU())
             layers.append(nn.Dropout(dropout))
             current_dim = hidden_dim
 
-        # Ultimo layer: output singolo per la regressione (Time-To-Event)
+        # Output layer is a single scalar
         layers.append(nn.Linear(current_dim, 1))
 
+        # self.network returns a tensor of size (batch_size, n_outputs) which in this case
+        # is equeal to (batch_size, 1) since we only have a single output
         self.network = nn.Sequential(*layers)
 
-    def forward(self, x):
-        # Squeeze per portare l'output da (Batch, 1) a (Batch,)
-        return self.network(x).squeeze(-1)
+    def forward(self, x: Tensor):
+        # Do not squeeze predictions, shape (batch_size, 1) is needed for SHAP library
+        return self.network(x)

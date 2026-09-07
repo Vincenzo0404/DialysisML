@@ -1,58 +1,89 @@
 # @package _global_
-# What y is: days to the patient's first adverse event, censored at one year,
-# read in months. Nothing about models or preprocessing -- those vary inside
-# this formulation, this is what every run in it shares.
+# What y is: which month the patient's first adverse event falls in, counting
+# from the session and truncated at one year -- a bucket index from 1, not a
+# duration. `1` is "within 30 days", `13` is "no event inside the horizon".
 #
-# Written out instead of composed from a group: none of it is ever swept, and
-# once runs are logged under this name it has to stay frozen. A different
-# target is a new folder, not an edit here.
+# Which sessions carry that target:
+#   - the last one is the session before the event; for a patient with no
+#     observable event, the last one with a year of event-free future ahead
+#   - the first one is whichever has the window's own span of history behind
+#     it, which `SlidingWindow` decides rather than this file
+#
+# Nothing about models or preprocessing: those vary inside this formulation,
+# this is what every run in it shares. Written out instead of composed from a
+# group because none of it is ever swept, and once runs are logged under this
+# name it has to stay frozen -- a different target is a new folder.
 
-# The source step, and the one deciding which events exist at all: `Decesso`
-# alone would be a different target, and so would keeping every event per
-# patient rather than the first.
 data_source:
   _target_: dialysisml.pipeline.steps.read_raw_data
   _partial_: true
   fromdb: ${fromdb}
+
+# Which events count as adverse: `Decesso` alone would be a different target.
+event_steps:
+  - _target_: dialysisml.pipeline.steps.select_event_types
+    _partial_: true
+    types:
+      - Decesso
+      - Ricovero per accesso vascolare
+      - Ricovero per altro
+
+  # before the merge drops the events preceding a patient's first session:
+  # those are the only ones a retained session can have behind it
+  - _target_: dialysisml.pipeline.steps.count_prior_events
+    _partial_: true
+
+series:
+  _target_: dialysisml.pipeline.steps.build_series
+  _partial_: true
   first_event_only: true
-  adv_event_types:
-    - Decesso
-    - Ricovero per accesso vascolare
-    - Ricovero per altro
 
 presplit:
   # Steps order defines presplit pipeline transformations order application
   steps:
     - _target_: dialysisml.pipeline.steps.drop_columns
       _partial_: true
-      columns: ${features:EXCLUDED_FEATURES}
+      columns: [fosfalcindex, mesi_fav, duration]
 
     - _target_: dialysisml.pipeline.steps.sample_hold
       _partial_: true
 
-    - _target_: dialysisml.pipeline.steps.compute_tte
+    # The last usable session is the one *before* the event
+    - _target_: dialysisml.pipeline.steps.drop_sessions_near_event
       _partial_: true
-      min_tte: 1
+      min_days: 1
 
-    # One-year horizon: censored series with less than that ahead of them go,
-    # everything reaching past it is truncated to it.
-    - _target_: dialysisml.pipeline.steps.filter_rows.drop_short_censored_sessions
+    # And for a censored series, the last usable session is the one with a
+    # year of event-free future ahead
+    - _target_: dialysisml.pipeline.steps.drop_early_censored_sessions
       _partial_: true
-      min_days: 365
-      cap_days: true
+      horizon_days: 365
 
-    # Months: at day resolution the target is mostly noise. A coarser unit
-    # rescales every error logged under this name, so it belongs here and not
-    # in a sweep -- quarters would be a new formulation.
-    - _target_: dialysisml.pipeline.steps.target_engineering.scale_tte
+    # Beyond the horizon the exact time is not what this formulation asks.
+    - _target_: dialysisml.pipeline.steps.cap_tte
       _partial_: true
+      cap: 365
+      into: tte_capped
+
+    # Months as `ceil(days / 30)`: at day resolution the target is mostly
+    # noise. Bucket `k` is "the event falls within `30k` days", so the bounds
+    # read the way a clinical horizon is stated. Buckets 1..12 span 30 days
+    # each; 13 is only the 5 days from 361 to 365 and holds two thirds of the
+    # rows -- it is the cap, "no event inside the horizon", not a month.
+    # `ceil` never returns 0 here because `drop_sessions_near_event` leaves
+    # `tte >= 1`: that keeps a relative-error loss off a zero denominator, and
+    # compresses its `1/y` weights from 365:1 to 13:1.
+    # The unit belongs here and not in a sweep: it rescales every error logged
+    # under this name, so a different one is a new formulation.
+    - _target_: dialysisml.pipeline.steps.scale_tte
+      _partial_: true
+      source: tte_capped
+      into: tte_months
       divisor: 30
 
     # Last: categories are inferred, so every fold gets the same columns.
     - _target_: dialysisml.pipeline.steps.one_hot_encode
       _partial_: true
-      columns: ${features:CATEGORICAL_FEATURES}
 
-# Regression on the time alone: `has_event` stays out of the labels.
-window_conf:
-  target_columns: [tte]
+# Regression on the restricted time alone: `censored` stays out of the labels.
+target_columns: [tte_months]

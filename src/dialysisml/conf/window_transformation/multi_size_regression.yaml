@@ -1,6 +1,0 @@
-# Nested windows all ending at the anchor, so the last value is added once.
-# Needs window_conf.size >= max(slices).
-_target_: dialysisml.pipeline.transformers.MultiSizeRegrTransformer
-slices: [30, 60, 90]
-regression_columns: ${features:NUMERIC_FEATURES}
-last_value_columns: null

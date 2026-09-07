@@ -1,14 +1,12 @@
-import pandas as pd
-
-from dialysisml.features import META_COLUMNS
+from dialysisml.schema import Frame, Role, select
 
 
-def sample_hold(df: pd.DataFrame) -> pd.DataFrame:
-    if not set(["patient", "t_session"]) <= set(df.columns):
-        raise ValueError("Missing patient in df")
+def sample_hold(frame: Frame) -> Frame:
+    """Carries each feature forward, then backward, within a patient."""
+    data = frame.data.copy()
+    features = select(frame.schema, role=Role.FEATURE)
 
-    cols_to_fill = df.columns.difference(META_COLUMNS)
-    df[cols_to_fill] = df.groupby("patient")[cols_to_fill].ffill()
-    df[cols_to_fill] = df.groupby("patient")[cols_to_fill].bfill()
+    data[features] = data.groupby("patient")[features].ffill()
+    data[features] = data.groupby("patient")[features].bfill()
 
-    return df
+    return frame.update(data)

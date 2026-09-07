@@ -10,10 +10,11 @@ docker-compose-datalake.yml
 
 
 data/
-notebooks/
+notebooks/test*
 results/
 analysis/
 experimental/
+tests/
 
 .env
 *.bak
@@ -24,6 +25,5 @@ mlflow.db*
 start.sh
 
 #Hydra
-
 multirun/
 outputs/

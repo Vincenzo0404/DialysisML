@@ -10,9 +10,10 @@ defaults:
 # postsplit, split and the window transformer are left to config.yaml: they are
 # swept, not part of the formulation, and every run logs them as params anyway.
 
+
+
 hydra:
   mode: MULTIRUN
   sweeper:
     params:
-      adapter.hidden_layers: choice([],[10],[20],[30],[40])
-      adapter.loss_function._target_: choice(dialysisml.metrics.msle)
+      adapter.hidden_layers: choice([],[10],[20],[30],[40],[50],[60])

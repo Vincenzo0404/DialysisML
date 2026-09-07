@@ -1,106 +1,102 @@
-from typing import Iterator, Sequence
+import logging
+from typing import Sequence
 
 import numpy as np
 import pandas as pd
 
-from dialysisml.features import META_COLUMNS
+from dialysisml.schema import Frame, Role, select
 
 # What makes a series: windows are cut inside one, never across two.
 GROUP_COLUMNS = ["patient", "t_event"]
 TIME_COLUMN = "t_session"
 
+logger = logging.getLogger(__name__)
+
 
 class SlidingWindow:
-    """Sliding windows over a DataFrame, materialised only when asked.
+    """Windows of a fixed span in days, one per session that has the history.
 
-    Holds a reference to the frame plus one integer per window — its first row —
-    so instances can share the same data without copying it. Iterating yields
-    one window at a time as a view; `materialize` is where the copy happens.
+    A session anchors a window when its series reaches back at least `days`
+    before it — not `days` worth of sessions, one session older than that. The
+    window holds the sessions in `(t - days, t]`, so it varies in length with
+    how often the patient came.
 
-    A window never crosses a series boundary.
+    Nothing is materialised: the windows are two arrays of row positions into
+    a frame sorted by series and date, which is what lets a transformer sum
+    over them without copying anything.
     """
 
-    def __init__(
-        self,
-        df: pd.DataFrame,
-        *,
-        size: int = 30,
-        stride: int = 1,
-        target_columns: Sequence[str] = ("tte",),
-        meta_columns: Sequence[str] = META_COLUMNS,
-    ):
-        if size < 2:
-            raise ValueError(f"size must be at least 2, got {size}")
-        if stride < 1:
-            raise ValueError(f"stride must be at least 1, got {stride}")
+    def __init__(self, frame: Frame, *, days: int = 30, min_sessions: int = 2):
+        if days < 1:
+            raise ValueError(f"days must be at least 1, got {days}")
 
-        self.size = size
-        self.stride = stride
-        self.target_columns = list(target_columns)
-        self.meta_columns = list(meta_columns)
+        self.days = days
+        self.schema = frame.schema
+        # a series has to occupy consecutive rows: a window is a range of
+        # positions, so a series split in two would take in other patients
+        self.df = frame.data.sort_values([*GROUP_COLUMNS, TIME_COLUMN]).reset_index(
+            drop=True
+        )
 
-        # a series has to occupy consecutive rows: windows are cut as slices,
-        # so a series split in two would silently mix in other patients' data
-        self.df = df.sort_values([*GROUP_COLUMNS, TIME_COLUMN]).reset_index(drop=True)
-        self.starts = self._find_starts()
+        day = self.df[TIME_COLUMN].to_numpy("datetime64[D]").astype("int64")
+        # counted from the earliest session rather than from the epoch: the
+        # fit subtracts nearly equal quantities, and smaller numbers there
+        # lose fewer digits to the cancellation
+        self.t = (day - day.min()).astype(np.float64)
+        self.start, self.anchor = self._bounds(day, min_sessions)
 
-    @property
-    def span(self) -> int:
-        """Rows a window covers, which exceeds `size` when stride > 1."""
-        return (self.size - 1) * self.stride + 1
+    def _bounds(self, day: np.ndarray, min_sessions: int) -> tuple[np.ndarray, ...]:
+        """First and last row of every window, as positions in `self.df`."""
+        starts, anchors = [], []
 
-    @property
-    def feature_columns(self) -> list[str]:
-        """Everything that is neither metadata nor a target.
-
-        Read off the frame rather than declared, so a feature added upstream
-        needs no change here.
-        """
-        excluded = {*self.meta_columns, *self.target_columns}
-        return [c for c in self.df.columns if c not in excluded]
-
-    def _find_starts(self) -> np.ndarray:
-        """First row of every window, series by series.
-
-        The last `span - 1` rows of a series cannot open a window, so the
-        starts are not contiguous: this is the only place that knows it.
-        """
-        starts: list[int] = []
         for _, group in self.df.groupby(GROUP_COLUMNS, sort=False):
             rows = group.index.to_numpy()
-            if len(rows) < self.span:
-                continue
-            first = int(rows[0])
-            starts.extend(range(first, first + len(rows) - self.span + 1))
-        return np.asarray(starts, dtype=np.int64)
+            t = day[rows]
+
+            # first row still inside the window of each session
+            first_inside = np.searchsorted(t, t - self.days, side="right")
+            # an anchor needs a session older than the window, not merely
+            # `days` worth of sessions: `first_inside > 0` says one exists
+            eligible = np.flatnonzero(first_inside > 0)
+
+            starts.append(rows[first_inside[eligible]])
+            anchors.append(rows[eligible])
+
+        start = np.concatenate(starts)
+        anchor = np.concatenate(anchors)
+
+        enough = anchor - start + 1 >= min_sessions
+        if not enough.all():
+            logger.info(
+                "%d of %d windows dropped: fewer than %d sessions in %d days",
+                (~enough).sum(),
+                len(enough),
+                min_sessions,
+                self.days,
+            )
+        return start[enough], anchor[enough]
 
     def __len__(self) -> int:
-        return len(self.starts)
+        return len(self.anchor)
 
-    def __iter__(self) -> Iterator[tuple[np.ndarray, np.ndarray]]:
-        """Yields (window, targets) one at a time.
+    def column_values(self, columns: Sequence[str]) -> np.ndarray:
+        """`(rows, columns)` over the whole frame, for a transformer to sum."""
+        return self.df[list(columns)].to_numpy(np.float64)
 
-        The window is `(size, n_features)` and is a view: slicing an ndarray,
-        even with a step, does not copy. Targets are `(n_targets,)`.
-        """
-        # converted once: doing it per window is the expensive mistake here
-        values = self.df[self.feature_columns].to_numpy(dtype=np.float32)
-        targets = self.df[self.target_columns].to_numpy()
+    def at_anchor(self, columns: Sequence[str]) -> np.ndarray:
+        """`(windows, columns)`: the value each window ends on."""
+        return self.df.loc[self.anchor, list(columns)].to_numpy()
 
-        for start in self.starts:
-            end = start + self.span
-            # a window is labelled at its last row, the session it predicts from
-            yield values[start : end : self.stride], targets[end - 1]
-
-    def materialize(self) -> tuple[np.ndarray, np.ndarray]:
-        """The whole dataset at once."""
-        if len(self) == 0:
-            raise ValueError("no series long enough to produce a window")
-
-        windows, targets = zip(*self)
-        return np.stack(windows), np.stack(targets)
+    def targets(self, columns: Sequence[str]) -> np.ndarray:
+        """The labels a run predicts, read at the session it predicts from."""
+        labels = select(self.schema, role=Role.LABEL)
+        not_labels = [c for c in columns if c not in labels]
+        if not_labels:
+            raise ValueError(f"targets that are not labels: {not_labels}")
+        return self.at_anchor(columns)
 
     def meta(self) -> pd.DataFrame:
         """One row per window: whose it is, and when it ends."""
-        anchors = self.starts + (self.span - 1)
-        return self.df.loc[anchors, self.meta_columns].reset_index(drop=True)
+        return self.df.loc[
+            self.anchor, select(self.schema, role=Role.META)
+        ].reset_index(drop=True)

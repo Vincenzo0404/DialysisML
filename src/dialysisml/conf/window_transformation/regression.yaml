@@ -1,4 +1,4 @@
-# One linear fit over the whole window, plus the last known value.
-_target_: dialysisml.pipeline.transformers.RegressionFeatureTransformer
-regression_columns: ${features:NUMERIC_FEATURES}
-last_value_columns: null    # null = every column, one-hot included
+# A line fitted over each window, plus the value it ends on. Which columns get
+# which comes from the schema: the fit on the numeric features, the last value
+# on all of them.
+_target_: dialysisml.pipeline.transformers.RegressionFeatures

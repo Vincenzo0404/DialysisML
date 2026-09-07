@@ -27,14 +27,12 @@ class SplitConfig:
 class WindowConfig:
     """How windows are cut out of a fold's rows.
 
-    Every column derived from the target must be listed here, even one not
-    used as a label: `feature_columns` is everything else, so a forgotten one
-    ends up among the inputs and leaks.
+    A span in days, not in sessions: how often a patient came should not
+    change what a window covers.
     """
 
-    size: int = 30
-    stride: int = 1
-    target_columns: list[str] = field(default_factory=lambda: ["tte"])
+    days: int = 30
+    min_sessions: int = 2
 
 
 @dataclass
@@ -53,22 +51,26 @@ class PostsplitConfig:
 
 @dataclass
 class Config:
-    # The step producing the raw frame. Part of the formulation rather than a
-    # config group: which events count as adverse is part of what y means.
+    # The three source stages: read the two frames, decide which events count,
+    # join them into one series per patient. Part of the formulation rather
+    # than a config group: they say what y means.
     data_source: Any = None
+    event_steps: list[Any] = field(default_factory=list)
+    series: Any = None
     presplit: PresplitConfig = field(default_factory=PresplitConfig)
     split: SplitConfig = field(default_factory=SplitConfig)
     postsplit: PostsplitConfig = field(default_factory=PostsplitConfig)
     # Top level: shared by every postsplit variant, not one thing to repeat
     # inside each of them.
     window_conf: WindowConfig = field(default_factory=WindowConfig)
+    # Which labels this run predicts.
+    target_columns: list[str] = field(default_factory=lambda: ["tte"])
     # An adapter, not a model: it owns the training loop and the scoring, and
     # the network it may wrap lives in `dialysisml.models`.
     adapter: Any = None
-    metrics: list[Any] = field(default_factory=list)
     # Fallback only: the MLflow experiment is normally the formulation folder,
     # so nothing has to keep two files saying the same name.
-    experiment_name: str = "scratch"
+    experiment_name: str | None = None
     fromdb: bool = False
     seed: int = 42
 

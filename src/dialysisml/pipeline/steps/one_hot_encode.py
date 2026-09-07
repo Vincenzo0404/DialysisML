@@ -1,33 +1,23 @@
-from typing import Sequence
-
-import pandas as pd
 from sklearn.preprocessing import OneHotEncoder
 
+from dialysisml.schema import Frame, Kind, Role, columns, select
 
-def one_hot_encode(
-    df: pd.DataFrame,
-    *,
-    columns: Sequence[str],
-    drop_missing: bool = True,
-) -> pd.DataFrame:
-    """Replaces categorical columns with their one-hot encoding.
-    """
-    columns = list(columns)
 
-    missing = set(columns) - set(df.columns)
-    if missing:
-        raise ValueError(f"columns not in the data: {sorted(missing)}")
+def one_hot_encode(frame: Frame, *, drop_missing: bool = True) -> Frame:
+    """Replaces every categorical feature with its one-hot encoding."""
+    categorical = select(frame.schema, role=Role.FEATURE, kind=Kind.CATEGORICAL)
+    data = frame.data
 
     if drop_missing:
-        df = df.dropna(subset=columns)
-    elif df[columns].isna().any().any():
-        raise ValueError(
-            f"missing values in {columns}: pass drop_missing=True or fill them first"
-        )
+        data = data.dropna(subset=categorical)
+    elif data[categorical].isna().any().any():
+        raise ValueError(f"missing values in {categorical}: pass drop_missing=True")
 
     encoder = OneHotEncoder(sparse_output=False, handle_unknown="ignore")
-    encoded = encoder.fit_transform(df[columns])
+    encoded = encoder.fit_transform(data[categorical])
+    names = list(encoder.get_feature_names_out(categorical))
 
-    result = df.drop(columns=columns)
-    result[list(encoder.get_feature_names_out(columns))] = encoded
-    return result
+    data = data.drop(columns=categorical)
+    data[names] = encoded
+
+    return frame.update(data, add=columns(float, Role.FEATURE, Kind.BINARY, names))

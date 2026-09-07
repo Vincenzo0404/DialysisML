@@ -1,73 +1,73 @@
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from enum import StrEnum
+from typing import Any, Sequence
 
 import numpy as np
 import pandas as pd
-import torch
+import pandera.pandas as pa
+from pandera.typing import DataFrame, Series
 
-from dialysisml.metrics import Metric
+
+class Split(StrEnum):
+    TRAIN = "train"
+    VAL = "val"
 
 
-def metric_name(metric: Metric) -> str:
-    """Name of a metric, whether a plain function or a functools.partial.
+class ResultSchema(pa.DataFrameModel):
+    """Schema of dataframe returned by train method."""
 
-    Hydra builds metrics with `_partial_: true`, and a partial has no
-    __name__: without this the metric columns would be unusable.
-    """
-    return getattr(metric, "__name__", None) or metric.func.__name__  # type: ignore[attr-defined]
+    iteration: Series[int] = pa.Field(ge=0)
+    split: Series[str] = pa.Field(isin=list(Split))
+    metric: Series[str]
+    value: Series[float]
+
+    class Config(pa.DataFrameModel.Config):
+        strict = True
+        coerce = True
+        unique = ["iteration", "split", "metric"]
+
+
+@dataclass(frozen=True)
+class TrainingResult:
+    history: DataFrame[ResultSchema]
+    best_iteration: int
+    total_iterations: int
+
+    def pivot(self, by: Sequence[str] = ("split", "metric")) -> pd.DataFrame:
+        """Pivots history returning it's wide form, one column per `by` combination."""
+        history = ResultSchema.validate(self.history)
+        wide = history.pivot(columns=list(by), index="iteration", values="value")
+        # flat names: a MultiIndex is not a metric name MLflow can take
+        wide.columns = ["_".join(column) for column in wide.columns]
+        return wide
 
 
 class ModelAdapter(ABC):
-    """Wrapper to different libraries models, used to have a unified API for training.
-
-    No constructor: each adapter takes the hyperparameters it needs, named as it
-    needs them.
-    """
+    """Wraps an ML model, used to have a unified API over different libraries."""
 
     @abstractmethod
     def train(
         self,
-        metrics: list[Metric],
         X_train: np.ndarray,
         y_train: np.ndarray,
         X_test: np.ndarray,
         y_test: np.ndarray,
-    ) -> pd.DataFrame:
-        """One row per iteration: `epoch`, plus a column per metric per side."""
+    ) -> tuple[Any, TrainingResult]:
+        """The model at its `best_iteration`, and what happened along the way.
+
+        Returned rather than stored on `self`: one adapter serves every fold,
+        so a field would keep only the last one.
+        """
+
+    @abstractmethod
+    def log_model(self, model: Any, name: str = "model") -> None:
+        """Attaches the model to the active MLflow run.
+
+        Abstract because there is no shared way to serialise these: torch,
+        xgboost and sklearn each have their own, and MLflow a flavor for each.
+        """
 
     @abstractmethod
     def __str__(self) -> str:
         pass
-
-    # The measure this model is judged by, reported as `test_score_*`. Only the
-    # name: an adapter with a loss derives it from there, one without states it.
-    score_metric_name: str
-
-    def compute_metrics_record(
-        self,
-        metrics: list[Metric],
-        iteration: int,
-        y_train: torch.Tensor,
-        preds_train: torch.Tensor,
-        y_test: torch.Tensor,
-        preds_test: torch.Tensor,
-        score_metric: Metric | None = None,
-    ) -> dict:
-        """Metrics for both sides, plus the score the model is judged by.
-
-        `score_metric` is the callable behind `score_metric_name`, passed by the
-        adapter that has one: the base knows the name only, and a name cannot be
-        evaluated. Folded in by name, not identity, because Hydra builds it and
-        the metrics as separate partials.
-        """
-        if score_metric is not None and metric_name(score_metric) not in map(
-            metric_name, metrics
-        ):
-            metrics = [*metrics, score_metric]
-
-        record: dict[str, float] = {"epoch": iteration}
-
-        for metric in metrics:
-            record[f"train_{metric_name(metric)}"] = float(metric(preds_train, y_train))
-            record[f"test_{metric_name(metric)}"] = float(metric(preds_test, y_test))
-
-        return record

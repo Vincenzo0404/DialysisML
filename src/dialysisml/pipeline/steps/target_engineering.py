@@ -1,42 +1,31 @@
-from typing import Callable
+import numpy as np
 
-import pandas as pd
+from dialysisml.schema import Frame, Kind, Role, columns
 
 
-def scale_tte(df: pd.DataFrame, divisor: int = 30) -> pd.DataFrame:
-    """Rescale tte by divisor."""
+def scale_tte(
+    frame: Frame, *, divisor: int = 30, source: str = "tte", into: str = "tte_months"
+) -> Frame:
+    """Which `divisor`-day interval the event falls in, counting from 1.
 
-    if "tte" not in df.columns:
-        raise ValueError("Missing column: 'tte'.")
+    Not a duration: `1` means "within `divisor` days". Never 0 -- the first
+    interval is 1 -- which keeps a relative-error loss off a zero denominator,
+    as long as `source` itself is positive.
+    """
     if divisor <= 0:
         raise ValueError(f"`divisor` must be positive, got {divisor}.")
 
-    df = df.copy()
-    df["tte"] = df["tte"] / divisor
-    return df
+    data = frame.data.copy()
+    data[into] = np.ceil(data[source] / divisor).astype(int)
+
+    return frame.update(data, add=columns(int, Role.LABEL, Kind.NUMERIC, [into]))
 
 
-def compute_tte(
-    df: pd.DataFrame,
-    *,
-    min_tte: int = 1,
-) -> pd.DataFrame:
-    """Days from each session to the next adverse event.
+def cap_tte(
+    frame: Frame, *, cap: int = 365, source: str = "tte", into: str = "tte_capped"
+) -> Frame:
+    """`min(source, cap)` as a new column: the restricted time to event."""
+    data = frame.data.copy()
+    data[into] = data[source].clip(upper=cap)
 
-    `min_tte=1` drops the sessions held on the event day itself, whose
-    time-to-event is zero. The threshold is always in days, so it keeps the
-    same meaning whatever `tte_transformation` does.
-
-    `tte_transformation` rescales the target after filtering: pass
-    `tte_to_months` to train on months instead of days.
-    """
-    required = {"t_session", "t_event", "has_event"}
-    missing = required - set(df.columns)
-    if missing:
-        raise ValueError(f"Missing required columns: {missing}")
-
-    df = df.copy()
-    df["tte"] = (df["t_event"] - df["t_session"]).dt.days
-    df = df[df["tte"] >= min_tte].copy()
-
-    return df
+    return frame.update(data, add=columns(int, Role.LABEL, Kind.NUMERIC, [into]))

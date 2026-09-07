@@ -7,9 +7,11 @@ from functools import partial
 from pathlib import Path
 from typing import Any, Callable, Optional, Sequence
 
+import mlflow
 import pandas as pd
 
 from dialysisml.pipeline.SlidingWindow import GROUP_COLUMNS
+from dialysisml.schema import Frame
 
 Step = Callable[..., pd.DataFrame]
 
@@ -17,8 +19,10 @@ logger = logging.getLogger(__name__)
 
 
 def step_name(step: Step) -> str:
-    """Name of a step"""
-    return getattr(step, "__name__", None) or step.func.__name__  # type: ignore[attr-defined]
+    """Name of a step, through however many partials wrap it."""
+    while not hasattr(step, "__name__"):
+        step = step.func  # type: ignore[attr-defined]
+    return step.__name__
 
 
 def _is_integral(column: pd.Series) -> bool:
@@ -87,19 +91,17 @@ class MetricCollector:
             data.update(profile(df, self.metrics))
         self.records.append(Record(idx, data, seconds))
 
-    def run(
-        self, step: Step, df: pd.DataFrame | None = None, **extra: Any
-    ) -> pd.DataFrame:
+    def run(self, step: Step, frame: Frame | None = None, **extra: Any) -> Frame:
         """Runs a step, times it, records it, returns its output.
 
-        `df=None` marks a source step: it produces a frame instead of taking
-        one, so it is called with no argument.
+        `frame=None` marks a source step: it produces a frame instead of
+        taking one, so it is called with no argument.
         """
         started = time.perf_counter()
-        result = step() if df is None else step(df)
+        result = step() if frame is None else step(frame)
         finished = time.perf_counter()
 
-        self.add_record(result, finished - started, idx=step_name(step), **extra)
+        self.add_record(result.data, finished - started, idx=step_name(step), **extra)
         return result
 
     # -- rendering -------------------------------------------------------
@@ -128,9 +130,6 @@ class MetricCollector:
         if columns:
             frame = frame[[c for c in columns if c in frame.columns]]
 
-        # a count turns into a float wherever a step left it missing, which
-        # would print every row as `113864.0`. Formatting to text rather than
-        # back to int: an int column holding a NaN is promoted to float again.
         counts = frame.drop(columns=["idx", "seconds"], errors="ignore")
         integral = [c for c in counts.columns if _is_integral(counts[c])]
         frame[integral] = counts[integral].map(
@@ -156,14 +155,12 @@ class MetricCollector:
         without opening it. Metrics rather than params: these are measured
         floats, and params compare as strings.
         """
-        import mlflow
 
         frame = self.to_frame()
         mlflow.log_text(frame.to_csv(index=False), artifact_name)
 
     def to_mlflow_scalars(self, prefix: str = "") -> None:
         """Every record as a `{prefix}{idx}_{measure}` single-valued metric."""
-        import mlflow
 
         for record in self.records:
             for measure, value in record.data.items():
@@ -228,40 +225,3 @@ FRAME_METRICS: dict[str, Callable] = {
 def metadata_collector() -> MetricCollector:
     """Tracks how a frame narrows: the presplit funnel, or a fold's two sides."""
     return MetricCollector(FRAME_METRICS)
-
-
-def epochs_collector(results: pd.DataFrame, score: str) -> MetricCollector:
-    """Best value and epoch of the measure the model is judged by.
-
-    Only that one: the per-epoch table keeps every metric, and a best per metric
-    is a column you cannot read across models that optimise different things.
-    """
-    column = f"test_{score}"
-    best = results.loc[results[column].idxmin()]
-    collector = MetricCollector()
-    collector.add_record(
-        idx="test_score",
-        best_value=float(best[column]),
-        best_epoch=float(best["epoch"]),
-        total_epochs=len(results),
-    )
-    return collector
-
-
-def aggregate_folds(folds: Sequence[MetricCollector]) -> MetricCollector:
-    """Mean and stddev of every measure across the folds of a cross-validation."""
-    if len(folds) == 1:
-        return folds[0]
-
-    frame = pd.concat([fold.to_frame() for fold in folds], ignore_index=True)
-    collector = MetricCollector()
-
-    for reduction, group in frame.groupby("idx", sort=False):
-        measures = group.drop(columns=["idx", "seconds"], errors="ignore")
-        collector.add_record(None, idx=f"{reduction}_mean", **measures.mean().to_dict())
-        if len(folds) > 1:
-            collector.add_record(
-                None, idx=f"{reduction}_std", **measures.std().to_dict()
-            )
-
-    return collector

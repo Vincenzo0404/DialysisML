@@ -8,9 +8,11 @@ import torch.optim as optim
 from sklearn.preprocessing import StandardScaler
 from torch.utils.data import DataLoader, TensorDataset
 
-from dialysisml.adapters.ModelAdapter import ModelAdapter, metric_name
+from dialysisml.adapters.ModelAdapter import ModelAdapter
 from dialysisml.metrics import Metric, mae
 from dialysisml.models import LSTM
+
+# TODO fix api later
 
 logger = logging.getLogger(__file__)
 
@@ -67,12 +69,14 @@ class LSTMAdapter(ModelAdapter):
         """
         model.eval()
         return torch.cat(
-            [model(X[i : i + self.batch_size]) for i in range(0, len(X), self.batch_size)]
+            [
+                model(X[i : i + self.batch_size])
+                for i in range(0, len(X), self.batch_size)
+            ]
         )
 
     def train(
         self,
-        metrics: list[Metric],
         X_train: np.ndarray,
         y_train: np.ndarray,
         X_test: np.ndarray,

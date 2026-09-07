@@ -1,51 +1,30 @@
 from typing import Any, Sequence
 
-import pandas as pd
-
-from dialysisml.features import META_COLUMNS, TARGET_COLUMNS
-from dialysisml.pipeline.steps.flag_missing_values import MISSING_SUFFIX
-
-
-def default_columns(df: pd.DataFrame) -> list[str]:
-    """Every numeric column that is a feature, which is not every numeric one.
-
-    `columns=None` exists so a new column from the view is scaled without
-    touching a config, which makes what it must leave out worth stating: the
-    targets, numeric like everything else and scaled they would change what the
-    metrics mean, and the missing flags, whose rare 1s a winsorizer flattens to
-    a constant. The meta columns survive on their type alone, but naming them
-    keeps that from being an accident.
-    """
-    excluded = {*META_COLUMNS, *TARGET_COLUMNS}
-    return [
-        column
-        for column in df.select_dtypes("number").columns
-        if column not in excluded and not column.endswith(MISSING_SUFFIX)
-    ]
+from dialysisml.schema import Frame, Kind, Role, select
 
 
 def apply_sklearn_transformer(
-    train: pd.DataFrame,
-    test: pd.DataFrame,
+    train: Frame,
+    test: Frame,
     *,
-    # left untyped: neither BaseEstimator nor TransformerMixin declares fit,
-    # so any sklearn annotation here fights the type checker for nothing
     transformer: Any,
     columns: Sequence[str] | None = None,
-) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Fits a sklearn transformer on train and applies it on both train and test sets"""
-    # an explicit list stays explicit: naming a target there is a deliberate
-    # choice, and only the default has to protect it
-    columns = default_columns(train) if columns is None else list(columns)
+) -> tuple[Frame, Frame]:
+    """Fits a sklearn transformer on train and applies it on both sides.
 
-    missing = set(columns) - set(train.columns)
-    if missing:
-        raise ValueError(f"columns not in the data: {sorted(missing)}")
+    Defaults to the numeric features: the binary ones are flags and one-hot
+    columns, which a winsorizer would flatten and a scaler only shifts.
+    """
+    if columns is None:
+        columns = select(train.schema, role=Role.FEATURE, kind=Kind.NUMERIC)
+    columns = list(columns)
 
-    fitted = transformer.fit(train[columns])
+    fitted = transformer.fit(train.data[columns])
 
-    train, test = train.copy(), test.copy()
-    train[columns] = fitted.transform(train[columns])
-    test[columns] = fitted.transform(test[columns])
+    train_data = train.data.copy()
+    train_data[columns] = fitted.transform(train_data[columns])
 
-    return train, test
+    test_data = test.data.copy()
+    test_data[columns] = fitted.transform(test_data[columns])
+
+    return train.update(train_data), test.update(test_data)
