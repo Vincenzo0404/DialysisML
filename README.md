@@ -28,7 +28,7 @@ Models' performance is tested along two axes:
 Requirements: Python 3.13+ and [uv](https://docs.astral.sh/uv/).
 
 ```bash
-git clone <https://github.com/Vincenzo0404/DialysisML>
+git clone https://github.com/Vincenzo0404/DialysisML
 cd DialysisML
 uv sync
 ```

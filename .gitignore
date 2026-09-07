@@ -9,7 +9,6 @@ __pycache__/
 docker-compose-datalake.yml
 
 
-data/
 notebooks/test*
 results/
 analysis/
@@ -27,3 +26,6 @@ start.sh
 #Hydra
 multirun/
 outputs/
+
+#dialysis data
+*.parquet
