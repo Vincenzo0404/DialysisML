@@ -39,15 +39,11 @@ uv sync
 
 `data/` is empty since it contains dialysis
 patients' records. A run reads two parquet files
-that are not shipped here:
-
-```
-data/df_sessions.parquet    # one row per dialysis session
-data/df_events.parquet      # one row per patient's adverse event
-```
+that are not shipped here see `data/README.md` for details.
 
 ### Running
-You can run the full ML pipeline with the following command:
+
+After putting .parquet files inside `data/` folder you can run the full ML pipeline with the following command:
 
 ```bash
 uv run python -m dialysisml.main formulation=first_event_cap365/ffnn
