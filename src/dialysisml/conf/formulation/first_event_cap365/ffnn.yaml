@@ -7,7 +7,7 @@ defaults:
   - override /adapter: ffnn
   - _self_
 
-# postsplit, split and the window transformer are left to config.yaml: they are
+# fitted, split and the window transformer are left to config.yaml: they are
 # swept, not part of the formulation, and every run logs them as params anyway.
 
 

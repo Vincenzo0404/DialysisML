@@ -87,9 +87,20 @@ class SlidingWindow:
         """`(windows, columns)`: the value each window ends on."""
         return self.df.loc[self.anchor, list(columns)].to_numpy()
 
-    def targets(self, columns: Sequence[str]) -> np.ndarray:
-        """The labels a run predicts, read at the session it predicts from."""
+    def targets(self, columns: Sequence[str] | None = None) -> np.ndarray:
+        """The labels a run predicts, read at the session it predicts from.
+
+        Defaults to every label in the schema: a formulation says what it
+        predicts by what its target step marks `LABEL`, so no config repeats
+        the names. Pass `columns` for a model wanting a subset of them.
+        """
         labels = select(self.schema, role=Role.LABEL)
+        if columns is None:
+            if not labels:
+                raise ValueError(
+                    "no targets: no step marked a column `Role.LABEL`"
+                )
+            columns = labels
         not_labels = [c for c in columns if c not in labels]
         if not_labels:
             raise ValueError(f"targets that are not labels: {not_labels}")

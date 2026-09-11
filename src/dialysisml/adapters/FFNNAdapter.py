@@ -53,6 +53,14 @@ class FFNNAdapter(ModelAdapter):
         if self.epochs <= 0:
             raise ValueError(f"Epochs must be positive. {self.epochs} was given.")
 
+        # the reshape below would silently interleave two targets into one
+        # vector no longer aligned with X
+        if y_train.ndim == 2 and y_train.shape[1] != 1:
+            raise ValueError(
+                f"this network predicts one target, got {y_train.shape[1]}: "
+                "narrow the formulation's labels or set target_columns"
+            )
+
         # sets the seed to initialize the model
         torch.manual_seed(self.random_seed)
 

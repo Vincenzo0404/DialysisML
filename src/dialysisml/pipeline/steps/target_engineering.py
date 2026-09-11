@@ -28,4 +28,34 @@ def cap_tte(
     data = frame.data.copy()
     data[into] = data[source].clip(upper=cap)
 
-    return frame.update(data, add=columns(int, Role.LABEL, Kind.NUMERIC, [into]))
+    return frame.update(data, add=columns(int, Role.META, Kind.NUMERIC, [into]))
+
+
+def build_buckets(
+    frame: Frame, *, thresholds: tuple[int, ...], tte_col_name: str = "tte"
+) -> Frame:
+    """One column per interval: did the event fall inside it, as far as we know."""
+    if any(t <= 0 for t in thresholds):
+        raise ValueError(f"Thresholds must be non-negative, got: {thresholds}")
+
+    if list(thresholds) != sorted(set(thresholds)):
+        raise ValueError(f"Thresholds must be strictly increasing, got: {thresholds}")
+
+    data = frame.data.copy()
+    tte, observed = data[tte_col_name], ~data["censored"]
+
+    names = []
+    for lower, upper in zip((0, *thresholds), thresholds):
+        # `tte` counts whole days, so `(lower, upper]` is days lower+1..upper
+        name = f"event_in_d{lower + 1}_{upper}"
+        # default to NaN (to handle censored)
+        data[name] = np.nan
+        # mark TTE NOT happening in interval
+        data.loc[tte >= upper, name] = 0.0
+        # mark TTE happening in interval
+        data.loc[observed & (tte > lower) & (tte <= upper), name] = 1.0
+        names.append(name)
+
+    return frame.update(
+        data, add=columns(float, Role.LABEL, Kind.BINARY, names, nullable=True)
+    )

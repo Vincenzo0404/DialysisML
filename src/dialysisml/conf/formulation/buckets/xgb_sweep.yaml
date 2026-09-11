@@ -1,0 +1,20 @@
+# @package _global_
+# Depth and regularisation, on the bucket classifiers.
+
+defaults:
+  - buckets/_base
+  - override /adapter: xgboost
+  - _self_
+
+adapter:
+  n_estimators: 800
+  early_stopping_rounds: 50
+
+hydra:
+  mode: MULTIRUN
+  sweeper:
+    params:
+      adapter.max_depth: choice(2, 3, 4)
+      adapter.min_child_weight: choice(50.0, 100.0)
+      adapter.subsample: choice(0.3, 0.4, 0.6)
+

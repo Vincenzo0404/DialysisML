@@ -3,6 +3,7 @@ from typing import Any
 
 import mlflow
 import mlflow.artifacts
+import mlflow.pyfunc
 import mlflow.pytorch
 import mlflow.sklearn
 import mlflow.xgboost
@@ -24,11 +25,15 @@ SHAP_ALGORITHMS = {
 }
 
 
-def load_model(run_id: str) -> tuple[Any, type[shap.Explainer]]:
+def load_model(
+    run_id: str, bucket: int | None = None
+) -> tuple[Any, type[shap.Explainer]]:
     """The run's model, and the explainer its flavor calls for.
 
     MLflow records the flavor alongside the model, so nothing here has to know
-    in advance which library trained it.
+    in advance which library trained it. A model that wraps one booster per
+    bucket needs `bucket` to say which to explain: a TreeExplainer takes one
+    tree model, not a curve over several.
     """
     uri = f"runs:/{run_id}/model"
     try:
@@ -36,10 +41,19 @@ def load_model(run_id: str) -> tuple[Any, type[shap.Explainer]]:
     except MlflowException as error:
         raise LookupError(f"run {run_id} logged no model.") from error
 
-    for name, (loader, explainer) in SHAP_ALGORITHMS.items():
-        if name in flavors:
+    for library, (loader, explainer) in SHAP_ALGORITHMS.items():
+        if library in flavors:
             return loader(uri), explainer
-    raise LookupError(f"no explainer for any of {list(flavors)}")
+
+    models = getattr(mlflow.pyfunc.load_model(uri).unwrap_python_model(), "models", None)
+    if models is None:
+        raise LookupError(f"no explainer for any of {list(flavors)}")
+    if bucket is None:
+        raise ValueError(
+            f"this run's model holds {len(models)} boosters: pass bucket=1.."
+            f"{len(models)} to pick which one to explain"
+        )
+    return models[bucket - 1], shap.TreeExplainer
 
 
 def list_models() -> None:
@@ -63,27 +77,31 @@ def rebuild_features(cfg: DictConfig) -> tuple[np.ndarray, np.ndarray, list[str]
         events = step(events)
 
     frame = instantiate(cfg.series)(sessions, events)
-    for step in instantiate(cfg.presplit.steps):
+    for step in instantiate(cfg.unfitted):
         frame = step(frame)
 
     train_idx, test_idx = next(iter(instantiate(cfg.split).split(frame.data)))
     train = frame.update(frame.data.iloc[train_idx])
     test = frame.update(frame.data.iloc[test_idx])
-    for step in instantiate(cfg.postsplit.fitted_transformations):
+    for step in instantiate(cfg.fitted):
         train, test = step(train, test)
 
     window_conf = OmegaConf.to_container(cfg.window_conf)
     assert isinstance(window_conf, dict), "window_conf must be a mapping"
     window_conf = {str(key): value for key, value in window_conf.items()}
 
-    transformer = instantiate(cfg.postsplit.window_transformation)
+    transformer = instantiate(cfg.window_transformation)
     X_train, schema = transformer.transform(SlidingWindow(train, **window_conf))
     X_test, _ = transformer.transform(SlidingWindow(test, **window_conf))
     return X_train, X_test, list(schema.columns)
 
 
 def get_shap_values(
-    run_id: str, background: int = 200, samples: int = 1000, seed: int = 42
+    run_id: str,
+    background: int = 200,
+    samples: int = 1000,
+    seed: int = 42,
+    bucket: int | None = None,
 ) -> shap.Explanation:
     """Compute shapley values.
 
@@ -105,7 +123,7 @@ def get_shap_values(
     if run_id is None:
         raise ValueError("a run id is required")
 
-    model, explainer = load_model(run_id)
+    model, explainer = load_model(run_id, bucket)
     print("model:", type(model).__name__)
 
     cfg = OmegaConf.create(mlflow.artifacts.load_text(f"runs:/{run_id}/config.yaml"))

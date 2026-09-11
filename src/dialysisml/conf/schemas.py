@@ -7,13 +7,6 @@ from hydra.core.config_store import ConfigStore
 
 
 @dataclass
-class PresplitConfig:
-    """Presplit data processing pipeline configuration"""
-
-    steps: list[Any] = field(default_factory=list)
-
-
-@dataclass
 class SplitConfig:
     """How patients are divided. k=1 means a single train/test split."""
 
@@ -36,20 +29,6 @@ class WindowConfig:
 
 
 @dataclass
-class PostsplitConfig:
-    """Postsplit data processing pipeline configuration.
-
-    Three sub-steps in a fixed order — fit the transformers, build the windows,
-    transform the windows — each configurable on its own. A single transformer,
-    not a list: one that flattens the time axis is only valid last, so the
-    composition belongs inside the transformer rather than in the config.
-    """
-
-    fitted_transformations: list[Any] = field(default_factory=list)
-    window_transformation: Any = None
-
-
-@dataclass
 class Config:
     # The three source stages: read the two frames, decide which events count,
     # join them into one series per patient. Part of the formulation rather
@@ -57,14 +36,18 @@ class Config:
     data_source: Any = None
     event_steps: list[Any] = field(default_factory=list)
     series: Any = None
-    presplit: PresplitConfig = field(default_factory=PresplitConfig)
+    # Steps taking one frame, so nothing they do can carry across the split.
+    unfitted: list[Any] = field(default_factory=list)
     split: SplitConfig = field(default_factory=SplitConfig)
-    postsplit: PostsplitConfig = field(default_factory=PostsplitConfig)
-    # Top level: shared by every postsplit variant, not one thing to repeat
-    # inside each of them.
+    # Steps fitted on the training rows and applied to both sides.
+    fitted: list[Any] = field(default_factory=list)
+    # Outside both lists: not a frame-to-frame step but the change of
+    # representation that follows them, from a frame to the windowed array.
     window_conf: WindowConfig = field(default_factory=WindowConfig)
-    # Which labels this run predicts.
-    target_columns: list[str] = field(default_factory=lambda: ["tte"])
+    window_transformation: Any = None
+    # Which labels this run predicts. Null means every column the unfitted
+    # steps marked `Role.LABEL`; set it only to predict a subset of them.
+    target_columns: list[str] | None = None
     # An adapter, not a model: it owns the training loop and the scoring, and
     # the network it may wrap lives in `dialysisml.models`.
     adapter: Any = None

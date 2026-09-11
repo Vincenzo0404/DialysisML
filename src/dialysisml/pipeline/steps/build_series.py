@@ -21,10 +21,11 @@ SOURCE_SCHEMA = pa.DataFrameSchema(
         **columns(
             "timedelta64[ns]", Role.META, Kind.TIMEDELTA, ["duration"], nullable=True
         ),
-        **columns(bool, Role.LABEL, Kind.BINARY, ["censored"]),
+        **columns(bool, Role.META, Kind.BINARY, ["censored"]),
         # observed days: to the event when there is one, to the last session
-        # when censored
-        **columns(int, Role.LABEL, Kind.NUMERIC, ["tte"], checks=pa.Check.ge(0)),
+        # when censored. Meta, not label: a target is derived from these two,
+        # it is not one of them.
+        **columns(int, Role.META, Kind.NUMERIC, ["tte"], checks=pa.Check.ge(0)),
         **columns(
             str,
             Role.FEATURE,

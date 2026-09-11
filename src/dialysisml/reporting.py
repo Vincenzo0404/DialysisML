@@ -183,7 +183,7 @@ def column_stat(
 ) -> Optional[float]:
     """One statistic of one column, or None where the column is not there yet.
 
-    The target is built partway through the presplit, so the steps before it
+    The target is built partway through the pipeline, so the steps before it
     have nothing to describe. None leaves those cells empty rather than
     failing, the same way a step that drops a column does.
     """
@@ -223,5 +223,5 @@ FRAME_METRICS: dict[str, Callable] = {
 
 
 def metadata_collector() -> MetricCollector:
-    """Tracks how a frame narrows: the presplit funnel, or a fold's two sides."""
+    """Tracks how a frame narrows: the step funnel, or a fold's two sides."""
     return MetricCollector(FRAME_METRICS)

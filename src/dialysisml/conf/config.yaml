@@ -1,18 +1,18 @@
 defaults:
   - base_config
   - split: single
-  - postsplit: median
+  - fitted: median
   # its own group, so the transformer and the window size vary independently
-  - window_transformation@postsplit.window_transformation: regression
+  - window_transformation: regression
   - adapter: ffnn
   # before the formulation, not last: a formulation has to win over the
   # defaults set here
   - _self_
-  # `???`, no default: the presplit lives inside a formulation, so composing
+  # `???`, no default: the unfitted steps live inside a formulation, so composing
   # without one leaves the pipeline empty and the run dies much further down
   - formulation: ???
 
-# Read from the database instead of the cached parquet files.
+
 fromdb: false
 
 seed: 42

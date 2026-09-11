@@ -1,0 +1,24 @@
+# The adapter takes its hyperparameters directly: a sweep overrides
+# `adapter.max_depth`, not `adapter.model_config.max_depth`.
+_target_: dialysisml.adapters.XGBRegressorAdapter
+
+n_estimators: 800
+max_depth: 4
+learning_rate: 0.05
+subsample: 0.8
+colsample_bytree: 0.8
+reg_lambda: 1.0
+min_child_weight: 50.0
+early_stopping_rounds: 30
+random_seed: ${seed}
+
+# A relative-error objective, since what this project reports is a percentage.
+# `mape` as the eval metric so early stopping stops on that same quantity
+# rather than on the objective's own scale.
+objective: reg:squaredlogerror
+eval_metric: mape
+relative_weights: false
+
+metrics:
+  - {_target_: dialysisml.metrics.mape, _partial_: true}
+  - {_target_: dialysisml.metrics.mae, _partial_: true}

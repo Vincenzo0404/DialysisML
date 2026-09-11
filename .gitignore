@@ -1,3 +1,25 @@
+# project files to exclude
+notebooks/test*
+results/
+analysis/
+experimental/
+tests/
+
+#Hydra directories
+multirun/
+outputs/
+
+#dialysis data
+*.parquet
+
+# extra
+.env
+*.bak
+outputs/
+.hydra/
+mlflow.db*
+*.log
+start.sh
 *.csv
 mlruns/
 __pycache__/
@@ -7,25 +29,4 @@ __pycache__/
 .vscode/
 .pytest_cache/
 docker-compose-datalake.yml
-
-
-notebooks/test*
-results/
-analysis/
-experimental/
-tests/
-
-.env
-*.bak
-outputs/
-.hydra/
-mlflow.db*
-*.log
-start.sh
-
-#Hydra
-multirun/
-outputs/
-
-#dialysis data
-*.parquet
+Internship.code-workspace

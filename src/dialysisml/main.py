@@ -1,4 +1,4 @@
-"""Entry point: presplit, patient-grouped split, per-fold pipeline, training.
+"""Entry point: unfitted steps, patient-grouped split, fitted steps, training.
 
 A run needs a formulation, which is the target it trains on and the MLflow
 experiment it lands in: `formulation=first_event_cap365/ffnn`. One adapter per
@@ -50,10 +50,12 @@ def log_training_results(
     Results must be in wide form.
     """
 
-    # loc, not iloc: best_idx is an iteration, which the pivot made the index
-    best = results.loc[best_iteration]
-    mlflow.log_metrics({f"best_{name}": value for name, value in best.items()})  # type: ignore
-    mlflow.log_metric("best_iteration", best_iteration)
+    # a one-shot fit has no iteration to pick: `best_X` would only repeat `X`
+    if len(results) > 1:
+        # loc, not iloc: best_idx is an iteration, which the pivot made the index
+        best = results.loc[best_iteration]
+        mlflow.log_metrics({f"best_{name}": value for name, value in best.items()})  # type: ignore
+        mlflow.log_metric("best_iteration", best_iteration)
     mlflow.log_metric("total_iterations", total_iterations)
 
     for iteration, row in results.iterrows():
@@ -139,13 +141,13 @@ def main(cfg: Config) -> None:
         frame = collector.run(partial(instantiate(cfg.series), sessions, events))
         log_dataset(frame.data, "raw_df")
 
-        # -- PRE SPLIT --
-        for step in instantiate(cfg.presplit.steps):
+        # -- UNFITTED --
+        for step in instantiate(cfg.unfitted):
             frame = collector.run(step, frame)
         frame.validate()
-        log_dataset(frame.data, "presplit")
+        log_dataset(frame.data, "unfitted")
 
-        logger.info("presplit:\n%s", collector.to_console())
+        logger.info("unfitted:\n%s", collector.to_console())
         collector.to_mlflow()
 
         # -- SPLIT --
@@ -155,10 +157,10 @@ def main(cfg: Config) -> None:
             test = frame.update(frame.data.iloc[test_idx])
 
             fold_report = metadata_collector()
-            # -- POST SPLIT --
+            # -- FITTED --
 
-            # apply transformations fitted on training set
-            for step in instantiate(cfg.postsplit.fitted_transformations):
+            # fitted on the training rows, applied to both sides
+            for step in instantiate(cfg.fitted):
                 train, test = step(train, test)
 
             # make windows
@@ -169,12 +171,14 @@ def main(cfg: Config) -> None:
             windows_train = SlidingWindow(train, **window_conf)
             windows_test = SlidingWindow(test, **window_conf)
 
-            targets = list(cfg.target_columns)
+            # None unless a formulation overrides: normally the targets are
+            # whatever the unfitted steps marked `Role.LABEL`
+            targets = list(cfg.target_columns) if cfg.target_columns else None
             y_train, y_test = windows_train.targets(targets), windows_test.targets(
                 targets
             )
 
-            transformer = instantiate(cfg.postsplit.window_transformation)
+            transformer = instantiate(cfg.window_transformation)
             X_train, feature_schema = transformer.transform(windows_train)
             X_test, _ = transformer.transform(windows_test)
 

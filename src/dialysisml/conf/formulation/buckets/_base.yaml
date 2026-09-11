@@ -1,0 +1,55 @@
+# @package _global_
+
+data_source:
+  _target_: dialysisml.pipeline.steps.read_raw_data
+  _partial_: true
+  fromdb: ${fromdb}
+
+# Which events count as adverse: `Decesso` alone would be a different target.
+event_steps:
+  - _target_: dialysisml.pipeline.steps.select_event_types
+    _partial_: true
+    types:
+      - Decesso
+      - Ricovero per accesso vascolare
+      - Ricovero per altro
+
+  # before the merge drops the events preceding a patient's first session:
+  # those are the only ones a retained session can have behind it
+  - _target_: dialysisml.pipeline.steps.count_prior_events
+    _partial_: true
+
+series:
+  _target_: dialysisml.pipeline.steps.build_series
+  _partial_: true
+  first_event_only: true
+
+unfitted:
+  - _target_: dialysisml.pipeline.steps.drop_columns
+    _partial_: true
+    columns: [fosfalcindex, mesi_fav, duration]
+
+  - _target_: dialysisml.pipeline.steps.sample_hold
+    _partial_: true
+
+  # The last usable session is the one *before* the event
+  - _target_: dialysisml.pipeline.steps.drop_sessions_near_event
+    _partial_: true
+    min_days: 1
+
+  # No `drop_early_censored_sessions`: a patient censored inside the horizon
+  # still answers every bucket his follow-up covers, and the NaN carries the
+  # rest. Dropping him is what this formulation exists not to do.
+
+  # build target as buckets in which TTE falls in
+  - _target_: dialysisml.pipeline.steps.target_engineering.build_buckets
+    _partial_: true
+    thresholds: [30,60,90,120,150,180,210,240,270,300,330,360]
+
+  # Last: categories are inferred, so every fold gets the same columns.
+  - _target_: dialysisml.pipeline.steps.one_hot_encode
+    _partial_: true
+
+# No `target_columns`: the targets are the bucket columns, which are the only
+# ones `build_buckets` marks `Role.LABEL`.
+

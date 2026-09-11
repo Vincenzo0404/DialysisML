@@ -4,16 +4,16 @@ from dialysisml.schema import Frame, Kind, Role, select
 
 
 def drop_incomplete_rows(
-    train: Frame, test: Frame, *, columns: Sequence[str] | None = None
-) -> tuple[Frame, Frame]:
-    """Drops rows still missing a value after sample_hold."""
+    frame: Frame, *, columns: Sequence[str] | None = None
+) -> Frame:
+    """Drops rows still missing a value after sample_hold.
+
+    The default -- every numeric feature -- keeps 0.6% of these rows, so a
+    panel that has to be present is normally named instead.
+    """
     if columns is None:
-        columns = select(train.schema, role=Role.FEATURE, kind=Kind.NUMERIC)
-    columns = list(columns)
-    return (
-        train.update(train.data.dropna(subset=columns)),
-        test.update(test.data.dropna(subset=columns)),
-    )
+        columns = select(frame.schema, role=Role.FEATURE, kind=Kind.NUMERIC)
+    return frame.update(frame.data.dropna(subset=list(columns)))
 
 
 def drop_sessions_near_event(frame: Frame, *, min_days: int = 1) -> Frame:
