@@ -1,6 +1,7 @@
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import StrEnum
+from pathlib import Path
 from typing import Any, Sequence
 
 import numpy as np
@@ -43,8 +44,20 @@ class TrainingResult:
         return wide
 
 
-class ModelAdapter(ABC):
-    """Wraps an ML model, used to have a unified API over different libraries."""
+class ModelAdapter[T](ABC):
+    """Wraps an ML model to have a unified API over different libraries."""
+
+    _model: T | None = None
+
+    @property
+    def model(self) -> T:
+        if self._model is None:
+            raise ValueError(f"model was not assigned.")
+        return self._model
+
+    @model.setter
+    def model(self, value: T) -> None:
+        self._model = value
 
     @abstractmethod
     def train(
@@ -53,20 +66,16 @@ class ModelAdapter(ABC):
         y_train: np.ndarray,
         X_test: np.ndarray,
         y_test: np.ndarray,
-    ) -> tuple[Any, TrainingResult]:
-        """The model at its `best_iteration`, and what happened along the way.
-
-        Returned rather than stored on `self`: one adapter serves every fold,
-        so a field would keep only the last one.
-        """
+    ) -> TrainingResult:
+        pass
 
     @abstractmethod
-    def log_model(self, model: Any, name: str = "model") -> None:
-        """Attaches the model to the active MLflow run.
+    def save(self, path: Path) -> None:
+        pass
 
-        Abstract because there is no shared way to serialise these: torch,
-        xgboost and sklearn each have their own, and MLflow a flavor for each.
-        """
+    @abstractmethod
+    def load(self, path: Path) -> None:
+        pass
 
     @abstractmethod
     def __str__(self) -> str:

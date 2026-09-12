@@ -8,15 +8,13 @@ run: sweep with `--multirun adapter.dropout=0.0,0.3`.
 import logging
 import time
 import warnings
-from functools import partial
 from pathlib import Path
 from typing import Any
 
 import hydra
 import mlflow
+import numpy as np
 import pandas as pd
-
-from dialysisml.pipeline.split import PatientGroupSplit
 
 pd.options.mode.copy_on_write = True  # ensures copies are made only when really needed
 
@@ -29,8 +27,9 @@ from omegaconf import DictConfig, OmegaConf
 from dialysisml import config
 from dialysisml.adapters import ModelAdapter, ResultSchema, TrainingResult
 from dialysisml.conf.schemas import Config, register
-from dialysisml.pipeline.SlidingWindow import SlidingWindow
+from dialysisml.pipeline.run_steps import run_fitted, run_unfitted, split_frame
 from dialysisml.reporting import metadata_collector
+from dialysisml.schema import Role, select
 
 register()
 
@@ -121,11 +120,10 @@ def main(cfg: Config) -> None:
     formulation, sweep_file = formulation_choice()
     mlflow.set_experiment(cfg.experiment_name or formulation)
 
-    # adapter keeps no state between calls to `train` method
     adapter: ModelAdapter = instantiate(cfg.adapter)
 
-    with mlflow.start_run(run_name=str(adapter)):
-
+    with mlflow.start_run(run_name=str(adapter)) as run:
+        run_id = run.info.run_id
         mlflow.log_params(choice_params(cfg))
         mlflow.log_params(adapter_params(cfg.adapter))
         # resolve=True expands ${seed} and ${features:...}
@@ -133,83 +131,53 @@ def main(cfg: Config) -> None:
 
         collector = metadata_collector()
 
-        # -- SOURCE --
-        sessions, events = instantiate(cfg.data_source)()
-        for step in instantiate(cfg.event_steps):
-            events = step(events)
-        # partial, not a call: run() needs the step itself to time and name it
-        frame = collector.run(partial(instantiate(cfg.series), sessions, events))
-        log_dataset(frame.data, "raw_df")
-
-        # -- UNFITTED --
-        for step in instantiate(cfg.unfitted):
-            frame = collector.run(step, frame)
-        frame.validate()
+        frame = run_unfitted(cfg, collector)
         log_dataset(frame.data, "unfitted")
-
         logger.info("unfitted:\n%s", collector.to_console())
         collector.to_mlflow()
 
-        # -- SPLIT --
-        splitter: PatientGroupSplit = instantiate(cfg.split)
-        for fold, (train_idx, test_idx) in enumerate(splitter.split(frame.data)):
-            train = frame.update(frame.data.iloc[train_idx])
-            test = frame.update(frame.data.iloc[test_idx])
+        train, test = split_frame(cfg, frame)
+        windowed_train, windowed_test = run_fitted(cfg, train, test)
 
-            fold_report = metadata_collector()
-            # -- FITTED --
+        features = select(windowed_train.schema, role=Role.FEATURE)
+        # None unless a formulation overrides: normally the targets are
+        # whatever the unfitted steps marked `Role.LABEL`
+        targets = (
+            list(cfg.target_columns)
+            if cfg.target_columns
+            else select(windowed_train.schema, role=Role.LABEL)
+        )
+        X_train = windowed_train.data[features].to_numpy(np.float32)
+        X_test = windowed_test.data[features].to_numpy(np.float32)
+        y_train = windowed_train.data[targets].to_numpy()
+        y_test = windowed_test.data[targets].to_numpy()
 
-            # fitted on the training rows, applied to both sides
-            for step in instantiate(cfg.fitted):
-                train, test = step(train, test)
+        # the row frames, not the windowed ones: the funnel counts sessions
+        fold_report = metadata_collector()
+        fold_report.add_record(
+            train.data, idx="train", windows=len(X_train), features=X_train.shape[1]
+        )
+        fold_report.add_record(
+            test.data, idx="test", windows=len(X_test), features=X_test.shape[1]
+        )
 
-            # make windows
-            window_conf = OmegaConf.to_container(cfg.window_conf)
-            assert isinstance(window_conf, dict), "window_conf must be a mapping"
-            window_conf = {str(key): val for key, val in window_conf.items()}
+        # the order the model expects its columns in: without it a reloaded
+        # model has 149 anonymous features and no way to notice a mismatch
+        mlflow.log_dict({"features": features}, "features.json")
 
-            windows_train = SlidingWindow(train, **window_conf)
-            windows_test = SlidingWindow(test, **window_conf)
+        # --- TRAINING ---
+        logger.info(f"Training {str(adapter)}: ...")
+        started = time.perf_counter()
+        results = adapter.train(X_train, y_train, X_test, y_test)
+        adapter.save(config.SAVED_ADAPTERS / run_id)
 
-            # None unless a formulation overrides: normally the targets are
-            # whatever the unfitted steps marked `Role.LABEL`
-            targets = list(cfg.target_columns) if cfg.target_columns else None
-            y_train, y_test = windows_train.targets(targets), windows_test.targets(
-                targets
-            )
+        log_training_results(
+            results.pivot(), results.best_iteration, results.total_iterations
+        )
 
-            transformer = instantiate(cfg.window_transformation)
-            X_train, feature_schema = transformer.transform(windows_train)
-            X_test, _ = transformer.transform(windows_test)
-
-            fold_report.add_record(
-                train.data, idx="train", windows=len(X_train), features=X_train.shape[1]
-            )
-            fold_report.add_record(
-                test.data, idx="test", windows=len(X_test), features=X_test.shape[1]
-            )
-
-            # the order the model expects its columns in: without it a reloaded
-            # model has 149 anonymous features and no way to notice a mismatch
-            mlflow.log_dict({"features": list(feature_schema.columns)}, "features.json")
-
-            # --- TRAINING ---
-            logger.info(f"Training {str(adapter)}: ...")
-            started = time.perf_counter()
-            model, results = adapter.train(X_train, y_train, X_test, y_test)
-            adapter.log_model(model)
-
-            history_pivoted = results.pivot()
-            log_training_results(
-                # pivot results to wide form
-                history_pivoted,
-                results.best_iteration,
-                results.total_iterations,
-            )
-
-            # measure training time
-            fold_report.add_record(None, time.perf_counter() - started, idx="training")
-            logger.info(fold_report.to_console())
+        # measure training time
+        fold_report.add_record(None, time.perf_counter() - started, idx="training")
+        logger.info(fold_report.to_console())
 
 
 if __name__ == "__main__":

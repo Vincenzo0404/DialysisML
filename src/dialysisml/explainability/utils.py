@@ -10,12 +10,12 @@ import mlflow.xgboost
 import numpy as np
 import shap
 import torch
-from hydra.utils import instantiate
 from mlflow.exceptions import MlflowException
 from omegaconf import DictConfig, OmegaConf
 
 from dialysisml import config
-from dialysisml.pipeline.SlidingWindow import SlidingWindow
+from dialysisml.pipeline.run_steps import run_fitted, run_unfitted, split_frame
+from dialysisml.schema import Role, select
 
 # Wich SHAP algorithm to use for each Library
 SHAP_ALGORITHMS = {
@@ -72,28 +72,13 @@ def list_models() -> None:
 
 def rebuild_features(cfg: DictConfig) -> tuple[np.ndarray, np.ndarray, list[str]]:
     """Replays the run's pipeline to rebuild the arrays it trained on."""
-    sessions, events = instantiate(cfg.data_source)()
-    for step in instantiate(cfg.event_steps):
-        events = step(events)
-
-    frame = instantiate(cfg.series)(sessions, events)
-    for step in instantiate(cfg.unfitted):
-        frame = step(frame)
-
-    train_idx, test_idx = next(iter(instantiate(cfg.split).split(frame.data)))
-    train = frame.update(frame.data.iloc[train_idx])
-    test = frame.update(frame.data.iloc[test_idx])
-    for step in instantiate(cfg.fitted):
-        train, test = step(train, test)
-
-    window_conf = OmegaConf.to_container(cfg.window_conf)
-    assert isinstance(window_conf, dict), "window_conf must be a mapping"
-    window_conf = {str(key): value for key, value in window_conf.items()}
-
-    transformer = instantiate(cfg.window_transformation)
-    X_train, schema = transformer.transform(SlidingWindow(train, **window_conf))
-    X_test, _ = transformer.transform(SlidingWindow(test, **window_conf))
-    return X_train, X_test, list(schema.columns)
+    train, test = run_fitted(cfg, *split_frame(cfg, run_unfitted(cfg)))
+    names = select(train.schema, role=Role.FEATURE)
+    return (
+        train.data[names].to_numpy(np.float32),
+        test.data[names].to_numpy(np.float32),
+        names,
+    )
 
 
 def get_shap_values(

@@ -1,10 +1,4 @@
-"""Patient-grouped splitting, the second macro step.
-
-Sessions of one patient are highly correlated, so a patient appearing in both
-train and test would be memorised rather than predicted. Splitting the rows of
-the DataFrame — rather than the windows built later — also keeps the split
-independent of the window size, so results across sizes stay comparable.
-"""
+"""Patient-grouped splitting"""
 
 from typing import Iterator
 

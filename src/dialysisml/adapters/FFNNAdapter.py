@@ -1,6 +1,7 @@
 import logging
 from copy import deepcopy
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 import mlflow.pytorch
@@ -49,7 +50,7 @@ class FFNNAdapter(ModelAdapter):
         y_train: np.ndarray,
         X_test: np.ndarray,
         y_test: np.ndarray,
-    ) -> tuple[Any, TrainingResult]:
+    ) -> TrainingResult:
         if self.epochs <= 0:
             raise ValueError(f"Epochs must be positive. {self.epochs} was given.")
 
@@ -171,15 +172,14 @@ class FFNNAdapter(ModelAdapter):
         # `best_*` metrics describe, not whatever the last epoch left behind
         model.load_state_dict(best_state)
 
-        return model, TrainingResult(
+        return TrainingResult(
             history=ResultSchema.validate(pd.DataFrame(records)),
             best_iteration=best_epoch - 1,
             total_iterations=epoch,
         )
 
-    def log_model(self, model: Any, name: str = "model") -> None:
-        # `pickle`, not the default `pt2`: torch.export returns an
-        # ExportedProgram, which is not an nn.Module and which SHAP cannot hook.
-        # `.cpu()` so the artifact loads on a machine without a GPU too --
-        # training is over by now, so moving it back costs nothing.
-        mlflow.pytorch.log_model(model.cpu(), name=name, serialization_format="pickle")
+    def save(self, path: Path) -> None:
+        return super().save(path)
+
+    def load(self, path: Path) -> None:
+        return super().load(path)

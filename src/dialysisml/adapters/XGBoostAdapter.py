@@ -1,5 +1,7 @@
 import logging
+import zipfile
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -28,38 +30,8 @@ def _predict(model: xgb.XGBClassifier, X: np.ndarray) -> np.ndarray:
     return model.predict_proba(X, iteration_range=end)[:, 1]
 
 
-class BucketClassifiers(pyfunc.PythonModel):
-    """The run's model: a hazard curve, computed by one booster per bucket.
-
-    One artifact rather than K, because a single hazard means little on its own
-    -- the survival through bucket `k` is the running product of `1 - hazard`,
-    so what the run predicts is the whole row. The boosters stay reachable for
-    a TreeExplainer, which can only take one of them at a time.
-    """
-
-    def __init__(self, models: list[xgb.XGBClassifier], example: np.ndarray):
-        self.models = models
-        # a handful of rows, so the logged model carries a schema
-        self.example = example
-
-    @property
-    def names(self) -> list[str]:
-        """`b1..bK`: the adapter sees arrays, so the column names it would
-        rather use never reach it. The index is the bucket's own order."""
-        return [f"b{i}" for i in range(1, len(self.models) + 1)]
-
-    def hazards(self, X: np.ndarray) -> np.ndarray:
-        """`(rows, buckets)`: each bucket's probability of the event inside it."""
-        return np.column_stack([_predict(model, X) for model in self.models])
-
-    # unannotated on purpose: mlflow reads the hints to infer a signature,
-    # and warns on every one it cannot turn into a schema
-    def predict(self, context, model_input, params=None):
-        return self.hazards(np.asarray(model_input))
-
-
 @dataclass
-class XGBoostAdapter(ModelAdapter):
+class XGBoostAdapter(ModelAdapter[list[xgb.XGBClassifier]]):
     """One binary booster per bucket of a discrete-time hazard formulation."""
 
     # maximum number of trees who partecipate in the ensemble
@@ -82,6 +54,8 @@ class XGBoostAdapter(ModelAdapter):
     objective: str = "binary:logistic"
     # metric by which the best model is selected
     eval_metric: str = "logloss"
+    # used to convert probabilities to TTE
+    prob_threshold: float = 0.5
 
     def __str__(self) -> str:
         return f"XGBBuckets_d={self.max_depth}_mcw={self.min_child_weight:g}"
@@ -108,7 +82,7 @@ class XGBoostAdapter(ModelAdapter):
         y_train: np.ndarray,
         X_test: np.ndarray,
         y_test: np.ndarray,
-    ) -> tuple[Any, TrainingResult]:
+    ) -> TrainingResult:
         if y_train.ndim != 2:
             raise ValueError(
                 "this adapter predicts one bucket per target column, got an "
@@ -178,15 +152,95 @@ class XGBoostAdapter(ModelAdapter):
                 }
             )
 
+        self.model = models
         # one row per metric rather than one per round: the K boosters stop at
         # K different rounds, so there is no shared iteration axis to report on
-        return BucketClassifiers(models, X_test[:5]), TrainingResult(
+        return TrainingResult(
             history=ResultSchema.validate(pd.DataFrame(records)),
             best_iteration=0,
             total_iterations=1,
         )
 
-    def log_model(self, model: Any, name: str = "model") -> None:
-        # pyfunc, not the xgboost flavor: what is being logged is the curve
-        # over every bucket, and no single booster is that
-        pyfunc.log_model(name=name, python_model=model, input_example=model.example)
+    def hazards(self, X: np.ndarray):
+        """Calculates hazard values for each classifier.
+
+        `Returns:`
+            ndarray of shape (X.shape[0], n_classifiers)
+        """
+        classifiers = self.model
+        hazards = []
+
+        for classifier in classifiers:
+            # [:, 1] contains hazard
+            hazard = classifier.predict_proba(X)[:, 1]
+            hazards.append(hazard)
+
+        return np.stack(hazards, axis=1)
+
+    def survival(self, X: np.ndarray, hazards: np.ndarray | None = None) -> np.ndarray:
+        """Calculates survival probability at time t."""
+        if hazards is None:
+            hazards = self.hazards(X)
+        hazards_inv = np.ones(hazards.shape, dtype=np.float32) - hazards
+
+        # first bucket survival values
+        survs = [hazards_inv[:, 0]]
+        # for each other bucket
+        for i in range(1, hazards.shape[1]):
+            surv_i = survs[i - 1] * hazards_inv[:, i]
+            survs.append(surv_i)
+
+        return np.stack(survs, 1)
+
+    def predict(
+        self,
+        X: np.ndarray,
+        threshold: float | None = None,
+        surv_probs: np.ndarray | None = None,
+    ) -> np.ndarray:
+        """Transforms survival probabilities into forecasted number of buckets the event will fall in"""
+        if threshold is None:
+            threshold = self.prob_threshold
+        if surv_probs is None:
+            surv_probs = self.survival(X)
+
+        s1, s2 = surv_probs.shape, X.shape
+        assert s1[0] == s2[0], f"X has {s2[0]} rows, while surv_values has {s1[0]}."
+
+        n_buckets = surv_probs.shape[1]
+        below = surv_probs < threshold
+        # first col index to have surv < threshold
+        first_bucket = np.argmax(below, axis=1)
+        # which rows are never below the threshold
+        never_below = ~below.any(axis=1)
+        # for those never below, forecasted bucket is considered over the last one
+        first_bucket[never_below] = n_buckets
+        first_bucket += 1
+
+        return first_bucket
+
+    def save(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        boosters = self.model
+        assert (
+            boosters is not None and len(boosters) != 0
+        ), "There is no booster to save."
+
+        # save all classifiers in a single zip file
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for i, model in enumerate(boosters):
+                raw: bytearray = model.get_booster().save_raw(raw_format="ubj")
+                zf.writestr(f"bucket_{i:02d}.ubj", bytes(raw))
+
+    def load(self, path: Path) -> None:
+        boosters: list[xgb.XGBClassifier] = []
+        with zipfile.ZipFile(path, mode="r") as zf:
+            names = sorted(n for n in zf.namelist() if n.startswith("bucket_"))
+            for name in names:
+                raw: bytes = zf.read(name)
+                # through the wrapper, not by assigning `_Booster`: predict_proba
+                # reads `n_classes_`, which only load_model restores
+                m = xgb.XGBClassifier()
+                m.load_model(bytearray(raw))
+                boosters.append(m)
+        self.model = boosters

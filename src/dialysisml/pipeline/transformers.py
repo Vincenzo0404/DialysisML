@@ -9,10 +9,11 @@ every window at once.
 from abc import ABC, abstractmethod
 
 import numpy as np
+import pandas as pd
 import pandera.pandas as pa
 
 from dialysisml.pipeline.SlidingWindow import SlidingWindow
-from dialysisml.schema import Kind, Role, columns, select
+from dialysisml.schema import Frame, Kind, Role, columns, select
 
 
 def linear_fit(
@@ -65,12 +66,10 @@ def linear_fit(
 
 
 class WindowTransformer(ABC):
-    """Turns the windows of a `SlidingWindow` into `(windows, features)`."""
+    """Turns the windows of a `SlidingWindow` into one row each."""
 
     @abstractmethod
-    def transform(
-        self, window: SlidingWindow
-    ) -> tuple[np.ndarray, pa.DataFrameSchema]: ...
+    def transform(self, window: SlidingWindow) -> Frame: ...
 
 
 class RegressionFeatures(WindowTransformer):
@@ -82,9 +81,7 @@ class RegressionFeatures(WindowTransformer):
     one-hot column it is the only thing there is to take.
     """
 
-    def transform(
-        self, window: SlidingWindow
-    ) -> tuple[np.ndarray, pa.DataFrameSchema]:
+    def transform(self, window: SlidingWindow) -> Frame:
         numeric = select(window.schema, role=Role.FEATURE, kind=Kind.NUMERIC)
         features = select(window.schema, role=Role.FEATURE)
 
@@ -96,6 +93,23 @@ class RegressionFeatures(WindowTransformer):
         # this order has to match how the schema below is built, or a feature
         # importance would be read against the wrong name
         values = np.hstack([slope, intercept, rmse, last]).astype(np.float32)
+        names = [
+            f"{c}_{stat}" for stat in ("slope", "intercept", "rmse") for c in numeric
+        ] + [f"{c}_last" for c in features]
+
+        # labels and bookkeeping read at the session each window ends on, so the
+        # windowed frame carries its own targets and `patient`/`tte`: an analysis
+        # would otherwise have to rebuild them from a second pass
+        carried = select(window.schema, role=Role.LABEL) + select(
+            window.schema, role=Role.META
+        )
+        data = pd.concat(
+            [
+                pd.DataFrame(values, columns=names),
+                window.df.loc[window.anchor, carried].reset_index(drop=True),
+            ],
+            axis=1,
+        )
         schema = pa.DataFrameSchema(
             {
                 **columns(
@@ -107,6 +121,7 @@ class RegressionFeatures(WindowTransformer):
                 # the last value keeps the kind of what it came from: a one-hot
                 # column stays binary, so a scaler still leaves it alone
                 **{f"{c}_last": window.schema.columns[c] for c in features},
+                **{c: window.schema.columns[c] for c in carried},
             }
         )
-        return values, schema
+        return Frame(data, schema)

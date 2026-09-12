@@ -4,6 +4,8 @@ results/
 analysis/
 experimental/
 tests/
+saved_adapters/
+
 
 #Hydra directories
 multirun/
@@ -15,7 +17,6 @@ outputs/
 # extra
 .env
 *.bak
-outputs/
 .hydra/
 mlflow.db*
 *.log
