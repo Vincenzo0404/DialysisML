@@ -124,6 +124,12 @@ def main(cfg: Config) -> None:
 
     with mlflow.start_run(run_name=str(adapter)) as run:
         run_id = run.info.run_id
+        logger.info(f"started run with id={run_id}")
+
+        # attach adapter's class name tag to the run
+        client = mlflow.MlflowClient()
+        client.set_tag(run_id, "adapter", type(adapter).__name__)
+
         mlflow.log_params(choice_params(cfg))
         mlflow.log_params(adapter_params(cfg.adapter))
         # resolve=True expands ${seed} and ${features:...}
@@ -166,7 +172,6 @@ def main(cfg: Config) -> None:
         mlflow.log_dict({"features": features}, "features.json")
 
         # --- TRAINING ---
-        logger.info(f"Training {str(adapter)}: ...")
         started = time.perf_counter()
         results = adapter.train(X_train, y_train, X_test, y_test)
         adapter.save(config.SAVED_ADAPTERS / run_id)

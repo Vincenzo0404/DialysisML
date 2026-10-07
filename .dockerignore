@@ -1,0 +1,26 @@
+# project files to exclude
+notebooks/test*
+notebooks/kaplan_meier.ipynb
+**/tests/
+
+# extra
+.env
+**/*.bak
+**/*.log
+start.sh
+**/*.csv
+**/__pycache__/
+**/*.egg-info/
+.venv/
+.claude/
+.vscode/
+.pytest_cache/
+docker-compose-datalake.yml
+Internship.code-workspace
+**/*.png
+**/*.pdf
+**/*.tex
+.dockerignore
+Dockerfile
+.gitignore
+.git

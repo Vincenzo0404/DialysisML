@@ -1,84 +1,73 @@
 import warnings
-from typing import Any
+from typing import cast
 
 import mlflow
 import mlflow.artifacts
-import mlflow.pyfunc
-import mlflow.pytorch
-import mlflow.sklearn
-import mlflow.xgboost
 import numpy as np
 import shap
 import torch
-from mlflow.exceptions import MlflowException
 from omegaconf import DictConfig, OmegaConf
 
 from dialysisml import config
-from dialysisml.pipeline.run_steps import run_fitted, run_unfitted, split_frame
+from dialysisml.adapters import ModelAdapter
+from dialysisml.conf.schemas import Config
+from dialysisml.pipeline.run_steps import (
+    run_fitted,
+    run_unfitted,
+    split_frame,
+    x_y_split,
+)
 from dialysisml.schema import Role, select
 
-# Wich SHAP algorithm to use for each Library
-SHAP_ALGORITHMS = {
-    "pytorch": (mlflow.pytorch.load_model, shap.DeepExplainer),  # type: ignore
-    "xgboost": (mlflow.xgboost.load_model, shap.TreeExplainer),  # type: ignore
-    "sklearn": (mlflow.sklearn.load_model, shap.TreeExplainer),  # type: ignore
-}
 
+def load_adapter(run_id: str) -> ModelAdapter:
+    """The adapter a run trained, rebuilt from disk.
 
-def load_model(
-    run_id: str, bucket: int | None = None
-) -> tuple[Any, type[shap.Explainer]]:
-    """The run's model, and the explainer its flavor calls for.
-
-    MLflow records the flavor alongside the model, so nothing here has to know
-    in advance which library trained it. A model that wraps one booster per
-    bucket needs `bucket` to say which to explain: a TreeExplainer takes one
-    tree model, not a curve over several.
+    The weights are no longer an MLflow artifact: training writes them to
+    `saved_adapters` under the run id. MLflow still says *which* adapter wrote
+    them, through the tag `main.py` sets on the run, and that name is what the
+    registry turns back into a class.
     """
-    uri = f"runs:/{run_id}/model"
     try:
-        flavors = mlflow.models.get_model_info(uri).flavors  # type: ignore
-    except MlflowException as error:
-        raise LookupError(f"run {run_id} logged no model.") from error
+        tags = mlflow.get_run(run_id).data.tags
+    except Exception as error:
+        raise LookupError(f"MLflow knows no run {run_id}.") from error
 
-    for library, (loader, explainer) in SHAP_ALGORITHMS.items():
-        if library in flavors:
-            return loader(uri), explainer
-
-    models = getattr(mlflow.pyfunc.load_model(uri).unwrap_python_model(), "models", None)
-    if models is None:
-        raise LookupError(f"no explainer for any of {list(flavors)}")
-    if bucket is None:
-        raise ValueError(
-            f"this run's model holds {len(models)} boosters: pass bucket=1.."
-            f"{len(models)} to pick which one to explain"
+    name = tags.get("adapter")
+    if name is None:
+        raise LookupError(
+            f"run {run_id} carries no `adapter` tag: it predates the tag, so "
+            "nothing records which class its archive holds"
         )
-    return models[bucket - 1], shap.TreeExplainer
+
+    path = config.SAVED_ADAPTERS / run_id
+    if not path.exists():
+        raise LookupError(
+            f"run {run_id} is an {name} but has no archive at {path}: the run "
+            "and `saved_adapters` are out of sync"
+        )
+    return ModelAdapter.resolve(name).load(path)
 
 
-def list_models() -> None:
-    """The runs that carry a model, newest first."""
+def list_adapters() -> None:
+    """The runs whose adapter can be rebuilt, and whether it is on disk."""
     for experiment in mlflow.search_experiments():
-        for model in mlflow.search_logged_models(
-            experiment_ids=[experiment.experiment_id], output_format="list"
-        ):
-            assert isinstance(model.source_run_id, str), "Model has no run_id ."
-            run = mlflow.get_run(model.source_run_id)
+        runs = mlflow.search_runs([experiment.experiment_id])
+        if runs.empty or "tags.adapter" not in runs:
+            continue
+        for _, run in runs[runs["tags.adapter"].notna()].iterrows():
+            run_id = str(run["run_id"])
+            name = str(run["tags.adapter"])
+            # a neural net is the only thing `get_shap_values` can explain today
+            mark = "shap" if name == "FFNNAdapter" else "    "
+            on_disk = (config.SAVED_ADAPTERS / run_id).exists()
+            # the bucket adapter's run name is its whole dataclass repr, which
+            # would push everything else off the line
+            run_name = str(run.get("tags.mlflow.runName", ""))[:40]
             print(
-                f"{model.source_run_id}  {experiment.name:<16}"
-                f"{run.data.tags.get('mlflow.runName', '')}"
+                f"{run_id}  {mark}  {name:<15} {experiment.name:<20} "
+                f"{run_name}{'' if on_disk else '  (no archive)'}"
             )
-
-
-def rebuild_features(cfg: DictConfig) -> tuple[np.ndarray, np.ndarray, list[str]]:
-    """Replays the run's pipeline to rebuild the arrays it trained on."""
-    train, test = run_fitted(cfg, *split_frame(cfg, run_unfitted(cfg)))
-    names = select(train.schema, role=Role.FEATURE)
-    return (
-        train.data[names].to_numpy(np.float32),
-        test.data[names].to_numpy(np.float32),
-        names,
-    )
 
 
 def get_shap_values(
@@ -86,12 +75,10 @@ def get_shap_values(
     background: int = 200,
     samples: int = 1000,
     seed: int = 42,
-    bucket: int | None = None,
 ) -> shap.Explanation:
     """Compute shapley values.
-
     Args:
-        `run_id`: MLFlow run id from which to take the model.
+        `run_id`: MLFlow run id from which to take the adapter.
         `background`: size of background set used to compute empirical distribution
             for marginalization.
         `samples`: number of rows in X_test to compute shapley values on.
@@ -108,16 +95,35 @@ def get_shap_values(
     if run_id is None:
         raise ValueError("a run id is required")
 
-    model, explainer = load_model(run_id, bucket)
-    print("model:", type(model).__name__)
+    adapter = load_adapter(run_id)
+    model = adapter.model
+    if not isinstance(model, torch.nn.Module):
+        raise NotImplementedError(
+            f"run {run_id} holds a {type(adapter).__name__}, whose model is a "
+            f"{type(model).__name__}: only neural adapters can be explained"
+        )
+    print("adapter:", type(adapter).__name__)
 
-    cfg = OmegaConf.create(mlflow.artifacts.load_text(f"runs:/{run_id}/config.yaml"))
-    assert isinstance(cfg, DictConfig), "the logged config must be a mapping"
-    X_train, X_test, names = rebuild_features(cfg)
+    # retrieve pipeline config
+    logged = OmegaConf.create(mlflow.artifacts.load_text(f"runs:/{run_id}/config.yaml"))
+    assert isinstance(logged, DictConfig), "the logged config must be a mapping"
+
+    cfg = cast(Config, logged)
+
+    # replay the run's pipeline to rebuild the arrays it trained on
+    frame = run_unfitted(cfg)
+    train, test = split_frame(cfg, frame)
+    train, test = run_fitted(cfg, train, test)
+
+    names = select(train.schema, role=Role.FEATURE)
+    X_train, _ = x_y_split(cfg, train)
+    X_test, _ = x_y_split(cfg, test)
 
     # check features match
-    logged = mlflow.artifacts.load_dict(f"runs:/{run_id}/features.json")["features"]
-    if names != logged:
+    logged_names = mlflow.artifacts.load_dict(f"runs:/{run_id}/features.json")[
+        "features"
+    ]
+    if names != logged_names:
         raise ValueError("rebuilt features differ from the ones the run logged")
     print(
         f"rebuilt {len(X_train)} train and {len(X_test)} test windows, "
@@ -125,23 +131,34 @@ def get_shap_values(
     )
 
     rng = np.random.default_rng(seed)
+    # background set used to get empirical features and target distribution
     reference = X_train[rng.choice(len(X_train), background, replace=False)]
+    # feature rows to explain
     explained = X_test[rng.choice(len(X_test), samples, replace=False)]
 
-    # Convert data to tensors if model is a pytorch module
-    if isinstance(model, torch.nn.Module):
-        model.eval()
-        reference, explained = torch.tensor(reference), torch.tensor(explained)
+    # make tensors
+    device = next(model.parameters()).device
+    model.eval()
+    reference = torch.tensor(reference, dtype=torch.float32, device=device)
+    explained = torch.tensor(explained, dtype=torch.float32, device=device)
 
+    # compute shapley values
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message="unrecognized nn.Module")
-        fitted = explainer(model, reference)
-        values = fitted.shap_values(explained)  # type: ignore
+        explainer = shap.DeepExplainer(model, reference)
+        shapley_values = np.asarray(explainer.shap_values(explained))
 
-    baseline = np.asarray(fitted.expected_value).reshape(-1)[0]  # type: ignore
+    shapley_values = shapley_values.squeeze(-1)
+    assert shapley_values.shape == (
+        samples,
+        len(names),
+    ), f"unexpected shape {shapley_values.shape}"
+
+    # E[f(X)] of the background set
+    baseline = np.asarray(explainer.expected_value).reshape(-1)[0]  # type: ignore
     return shap.Explanation(
-        values=np.asarray(values).reshape(samples, len(names)),
+        values=shapley_values,
         base_values=np.repeat(baseline, samples),
-        data=np.asarray(explained),
+        data=explained.cpu().numpy(),
         feature_names=names,
     )

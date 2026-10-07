@@ -1,13 +1,13 @@
+import json
 import logging
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Self
 
 import numpy as np
 import pandas as pd
 import xgboost as xgb
-from mlflow import pyfunc
 from sklearn.metrics import roc_auc_score
 
 from dialysisml.adapters.ModelAdapter import (
@@ -56,6 +56,8 @@ class XGBoostAdapter(ModelAdapter[list[xgb.XGBClassifier]]):
     eval_metric: str = "logloss"
     # used to convert probabilities to TTE
     prob_threshold: float = 0.5
+
+    _hazards = None
 
     def __str__(self) -> str:
         return f"XGBBuckets_d={self.max_depth}_mcw={self.min_child_weight:g}"
@@ -198,7 +200,7 @@ class XGBoostAdapter(ModelAdapter[list[xgb.XGBClassifier]]):
         threshold: float | None = None,
         surv_probs: np.ndarray | None = None,
     ) -> np.ndarray:
-        """Transforms survival probabilities into forecasted number of buckets the event will fall in"""
+        """Transforms survival probabilities into forecasted bucket the event will fall in"""
         if threshold is None:
             threshold = self.prob_threshold
         if surv_probs is None:
@@ -219,22 +221,30 @@ class XGBoostAdapter(ModelAdapter[list[xgb.XGBClassifier]]):
 
         return first_bucket
 
-    def save(self, path: Path):
+    def save(self, path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         boosters = self.model
         assert (
             boosters is not None and len(boosters) != 0
         ), "There is no booster to save."
 
-        # save all classifiers in a single zip file
         with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("params.json", json.dumps(self.dump_params()))
             for i, model in enumerate(boosters):
                 raw: bytearray = model.get_booster().save_raw(raw_format="ubj")
                 zf.writestr(f"bucket_{i:02d}.ubj", bytes(raw))
 
-    def load(self, path: Path) -> None:
+    @classmethod
+    def load(cls, path: Path) -> Self:
         boosters: list[xgb.XGBClassifier] = []
+        instance = cls()
         with zipfile.ZipFile(path, mode="r") as zf:
+            if "params.json" in zf.namelist():
+                instance.load_params(json.loads(zf.read("params.json")))
+            else:
+                logger.warning(
+                    f"params.json was not found in {path.resolve()} loading default params."
+                )
             names = sorted(n for n in zf.namelist() if n.startswith("bucket_"))
             for name in names:
                 raw: bytes = zf.read(name)
@@ -243,4 +253,11 @@ class XGBoostAdapter(ModelAdapter[list[xgb.XGBClassifier]]):
                 m = xgb.XGBClassifier()
                 m.load_model(bytearray(raw))
                 boosters.append(m)
-        self.model = boosters
+        instance.model = boosters
+        return instance
+
+
+if __name__ == "__main__":
+    from dialysisml.adapters import XGBoostAdapter
+
+    print(type.__dict__)

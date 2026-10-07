@@ -1,10 +1,12 @@
+import io
+import json
 import logging
+import zipfile
 from copy import deepcopy
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Self
 
-import mlflow.pytorch
 import numpy as np
 import pandas as pd
 import torch
@@ -43,6 +45,17 @@ class FFNNAdapter(ModelAdapter):
 
     def __str__(self) -> str:
         return f"FFNN_hl={list(self.hidden_layers)}"
+
+    def predict(self, X: np.ndarray) -> np.ndarray:
+        device = next(self.model.parameters()).device
+
+        X_t = torch.tensor(X, dtype=torch.float32).to(device)
+        self.model.eval()
+        with torch.no_grad():
+            y_t: torch.Tensor = self.model(X_t)
+            y_t = y_t.squeeze(-1)
+
+        return y_t.cpu().numpy()
 
     def train(
         self,
@@ -171,6 +184,7 @@ class FFNNAdapter(ModelAdapter):
         # the returned model is the one `best_iteration` and the reported
         # `best_*` metrics describe, not whatever the last epoch left behind
         model.load_state_dict(best_state)
+        self.model = model
 
         return TrainingResult(
             history=ResultSchema.validate(pd.DataFrame(records)),
@@ -179,7 +193,29 @@ class FFNNAdapter(ModelAdapter):
         )
 
     def save(self, path: Path) -> None:
-        return super().save(path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        buffer = io.BytesIO()
+        torch.save(self.model.cpu(), buffer)
 
-    def load(self, path: Path) -> None:
-        return super().load(path)
+        with zipfile.ZipFile(path, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            zf.writestr("model.pt", buffer.getvalue())
+            zf.writestr("params.json", json.dumps(self.dump_params()))
+
+    @classmethod
+    def load(cls, path: Path) -> Self:
+        instance = cls()
+        with zipfile.ZipFile(path, mode="r") as zf:
+            if "params.json" in zf.namelist():
+                instance.load_params(json.loads(zf.read("params.json")))
+            instance.model = torch.load(
+                io.BytesIO(zf.read("model.pt")), weights_only=False
+            )
+        return instance
+
+
+if __name__ == "__main__":
+    from dialysisml.config import SAVED_ADAPTERS
+
+    adapt = FFNNAdapter.load(SAVED_ADAPTERS / "db8cfc372a3b46438f575143e6e3cbee")
+    pred = adapt.predict(np.ones((1000, 149)))
+    print(pred)

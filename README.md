@@ -67,7 +67,7 @@ named after the model that produced it.
 ### SHAP Analysis
 The Python module `dialysisml.explainability.utils` provides `get_shap_values` function which takes as a required argument the MLFlow `run_id` of the run which produced the model you want to analyze.
 You can quickly run a full SHAP analysis by running the notebook `notebooks/shap.ipynb` which will plot different charts about SHAP values of the given run.
- Careful: you must still provide the `run_id` of the MLFlow run you want to analyze.
+Careful: you must still provide the `run_id` of the MLFlow run you want to analyze (look inside `notebooks/README.md` for additional details).
 
 ## Project structure
 ```
